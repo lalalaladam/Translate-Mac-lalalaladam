@@ -27,6 +27,94 @@ class ViewController: NSViewController, WKNavigationDelegate {
 
     private func installUserScripts(on controller: WKUserContentController) {
         controller.removeAllUserScripts()
+
+        // Google measures source text in a hidden 24/32 px layer and later
+        // switches visible long text to 18/28 px. Its web font can also swap
+        // after the first glyph is painted. Stabilize every visible source
+        // layer before first paint while preserving the measurement layer.
+        let typographyGuard = WKUserScript(
+            source: #"""
+                (() => {
+                    const styleId = "mac-translate-early-source-typography";
+                    const install = () => {
+                        if (document.getElementById(styleId)) return true;
+                        const root = document.head || document.documentElement;
+                        if (!root) return false;
+
+                        const style = document.createElement("style");
+                        style.id = styleId;
+                        style.textContent = `
+                            .QFw9Te .Hapztf,
+                            .QFw9Te .cEWAef,
+                            .QFw9Te .er8xn,
+                            .QFw9Te .fXYY1b,
+                            .QFw9Te .sB7Iec {
+                                font-family: -apple-system, BlinkMacSystemFont,
+                                    "Helvetica Neue", Arial, sans-serif !important;
+                                font-size: 18px !important;
+                                line-height: 28px !important;
+                                font-weight: 400 !important;
+                                letter-spacing: normal !important;
+                                transition: none !important;
+                            }
+
+                            .QFw9Te .vJwDU {
+                                font-family: -apple-system, BlinkMacSystemFont,
+                                    "Helvetica Neue", Arial, sans-serif !important;
+                                font-size: 24px !important;
+                                line-height: 32px !important;
+                                font-weight: 400 !important;
+                                letter-spacing: normal !important;
+                                transition: none !important;
+                            }
+
+                            /* Google uses 24/32 and 18/28 typography for the
+                               expanded result at different responsive states.
+                               Keep its visible and measurement layers aligned
+                               without altering compact result cards. */
+                            .QcsUad.sMVRZe .Cbi98e,
+                            .QcsUad.sMVRZe .OvtS8d,
+                            .QcsUad.sMVRZe .lRu31 {
+                                font-size: 18px !important;
+                                line-height: 28px !important;
+                                transition: none !important;
+                            }
+                        `;
+                        root.appendChild(style);
+                        return true;
+                    };
+
+                    // Google's textarea auto-height update runs in a later
+                    // timer. During a large paste, WebKit therefore scrolls
+                    // the still-short textarea to the caret at the end before
+                    // Google expands it. Match Google's final height during
+                    // the input event, before that intermediate frame paints.
+                    document.addEventListener("input", (event) => {
+                        const textarea = event.target;
+                        if (!(textarea instanceof HTMLTextAreaElement) ||
+                            !textarea.matches(
+                                ".er8xn, textarea[role=\"combobox\"][aria-controls=\"kvLWu\"]"
+                            )) {
+                            return;
+                        }
+
+                        textarea.style.removeProperty("height");
+                        textarea.style.height =
+                            `${Math.ceil(textarea.scrollHeight)}px`;
+                    }, true);
+
+                    if (!install()) {
+                        document.addEventListener("DOMContentLoaded", install, {
+                            once: true
+                        });
+                    }
+                })();
+            """#,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        controller.addUserScript(typographyGuard)
+
         let suppressSelectionToolbar = TranslateFeaturePreferences.hideGoogleSelectionToolbar
             ? "true"
             : "false"
@@ -247,6 +335,42 @@ class ViewController: NSViewController, WKNavigationDelegate {
                     .QcsUad:not(.FkMbO) .lRu31,
                     .er8xn {
                         min-height: 65px;
+                    }
+
+                    /* Keep visible source layers on a local, stable font and
+                       preserve Google's hidden 24/32 px line-count layer. */
+                    .QFw9Te .Hapztf,
+                    .QFw9Te .cEWAef,
+                    .QFw9Te .er8xn,
+                    .QFw9Te .fXYY1b,
+                    .QFw9Te .sB7Iec {
+                        font-family: -apple-system, BlinkMacSystemFont,
+                            "Helvetica Neue", Arial, sans-serif !important;
+                        font-size: 18px !important;
+                        line-height: 28px !important;
+                        font-weight: 400 !important;
+                        letter-spacing: normal !important;
+                        transition: none !important;
+                    }
+
+                    .QFw9Te .vJwDU {
+                        font-family: -apple-system, BlinkMacSystemFont,
+                            "Helvetica Neue", Arial, sans-serif !important;
+                        font-size: 24px !important;
+                        line-height: 32px !important;
+                        font-weight: 400 !important;
+                        letter-spacing: normal !important;
+                        transition: none !important;
+                    }
+
+                    /* Keep the expanded result and its two hidden measurement
+                       layers aligned across Google's responsive states. */
+                    .QcsUad.sMVRZe .Cbi98e,
+                    .QcsUad.sMVRZe .OvtS8d,
+                    .QcsUad.sMVRZe .lRu31 {
+                        font-size: 18px !important;
+                        line-height: 28px !important;
+                        transition: none !important;
                     }
 
                     html {

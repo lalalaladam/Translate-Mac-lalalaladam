@@ -118,6 +118,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         toggleItem.keyEquivalentModifierMask = [.command]
         toggleItem.target = self
         translationMenu.addItem(toggleItem)
+
+        // FloatingPanel's close() override hides and retains the window, so
+        // Command+W does not terminate the app and the global hotkey can show
+        // it again. The explicit target also works when WebKit owns focus.
+        let closeItem = NSMenuItem(
+            title: "关闭窗口",
+            action: #selector(closeWindowFromMenu(_:)),
+            keyEquivalent: "w"
+        )
+        closeItem.keyEquivalentModifierMask = [.command]
+        closeItem.target = self
+        translationMenu.addItem(closeItem)
         translationMenu.addItem(.separator())
 
         let copySourceItem = NSMenuItem(
@@ -265,6 +277,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePanelFromMenu() {
         panel.toggle()
+    }
+
+    @objc private func closeWindowFromMenu(_ sender: Any?) {
+        if let keyWindow = NSApp.keyWindow {
+            keyWindow.performClose(sender)
+        } else {
+            panel?.close()
+        }
     }
 
     @objc private func copyAllSourceFromMenu() {
