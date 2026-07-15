@@ -6,8 +6,11 @@ This document compares the original `mac-translate` project by [m-inan](https://
 |---|---|---|---|
 | Global shortcut | Uses the third-party `HotKey` package | Uses a native Carbon global hotkey | Removes the external hotkey dependency and improves background shortcut reliability |
 | Window activation | Does not explicitly activate the application before showing the panel | Activates the application and brings the window to the front | The window appears even when another application is active |
+| Cold-launch behavior | Starts without presenting the translation window | Automatically presents the customized window once it is ready | First-time users immediately understand that the app has opened |
 | Shortcut toggle behavior | Mainly depends on `isPresented` and key-window state | Hides only when visible and frontmost; otherwise brings the window forward | `Command + \\` behaves as a predictable show/hide toggle |
 | Window level | Uses a floating panel that remains above normal windows | Uses a normal window level | The translation window is no longer permanently always-on-top |
+| Configurable window level | Window level is fixed | Adds a persistent “Keep on Top in the Current Space” switch, disabled by default | Users can opt into always-on-top behavior without changing the default |
+| Space visibility | The panel behavior is fixed in source code | Adds a persistent “Show on All Spaces” switch, disabled by default, including other applications' full-screen Spaces on macOS 13+ | Users can summon the window from ordinary and full-screen Spaces independently of keep-on-top behavior |
 | Window type | Non-activating floating panel | Activatable normal panel | Behaves more like a standard macOS window |
 | Window closing | Closing normally closes the panel | Closing hides and reuses the panel | The global shortcut can show it again reliably |
 | Window dragging | Dragging inside the WebView generally moves the entire window | Only non-text areas drag the window | Text can be selected without losing normal window dragging |
@@ -33,6 +36,8 @@ This document compares the original `mac-translate` project by [m-inan](https://
 | DOM-change handling | Injects mostly static CSS after page loading | Uses document-start guards, a `MutationObserver`, stable attributes, and repeated cleanup | More resistant to Google Translate interface changes |
 | Navigation control | Does not explicitly restrict secondary navigation | Only the main Google Translate page is allowed | Prevents unintended detail or external-page navigation |
 | macOS application menu | Does not create a complete native main menu | Adds `translate`, `翻译`, `语言`, and `显示` menus | Custom features are accessible from the macOS menu bar |
+| Shortcut reference | Keyboard shortcuts are documented only outside the app | Adds a read-only `快捷键` menu containing every implemented shortcut | Users can discover shortcuts without opening the README |
+| Interface language | Native menus are not available in two selectable languages, and the Google page locale follows external state | Adds a persistent Chinese/English interface-language menu and passes the matching `hl` locale to Google Translate | Native menus and source/target language labels switch together without losing text or the current translation direction |
 | `Command + W` | No reliable native close-window command | Adds a native close-window menu action while retaining the panel | Hides the window without quitting, allowing the global shortcut to reopen it |
 | `Command + Q` | No reliable native Quit menu item | Adds a Quit item targeting `NSApplication.terminate` | `Command + Q` fully terminates the application |
 | Display customization | Interface changes are hard-coded | Four checkable display options control pinyin, selection toolbar, action buttons, and language highlighting | Visual customizations can be enabled or disabled |

@@ -25,6 +25,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusBar: NSStatusBar!
     var statusBarItem: NSStatusItem!
     private var featureMenuItems: [TranslateFeature: NSMenuItem] = [:]
+    private var windowBehaviorMenuItems: [TranslateWindowBehavior: NSMenuItem] = [:]
     private var sourceLanguageMenuItems: [TranslateLanguage: NSMenuItem] = [:]
     private var targetLanguageMenuItems: [TranslateLanguage: NSMenuItem] = [:]
     private var sourceLanguageRootItem: NSMenuItem?
@@ -32,8 +33,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var languageSummaryItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        // AppKit only registers a panel as eligible for another application's
+        // full-screen Space while the owning app uses the accessory policy.
+        // Create the panel in that policy, then immediately restore normal
+        // Dock and menu-bar behavior before anything is presented.
+        let restoreRegularPolicy = NSApp.activationPolicy() == .regular
+        if restoreRegularPolicy {
+            NSApp.setActivationPolicy(.accessory)
+        }
+        defer {
+            if restoreRegularPolicy {
+                NSApp.setActivationPolicy(.regular)
+            }
+        }
+
+        AppInterfaceLanguagePreferences.registerDefaults()
         TranslateFeaturePreferences.registerDefaults()
         TranslateLanguagePreferences.registerDefaults()
+        TranslateWindowPreferences.registerDefaults()
         setupMainMenu()
         panel = FloatingPanel()
         
@@ -51,6 +68,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             keyCode: Constants.keyCode,
             modifiers: Constants.carbonModifiers
         )
+
+        // A cold launch should behave like a normal app: show its window once
+        // the customized page is ready instead of waiting for the user to
+        // discover the global shortcut.
+        panel.presentWhenReady()
     }
 
     func applicationWillTerminate(_ aNotification: Notification) {
@@ -58,6 +80,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        return true
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        if !flag {
+            panel?.presentWhenReady()
+        }
         return true
     }
     
@@ -70,7 +102,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupMainMenu() {
-        let mainMenu = NSMenu(title: "Main Menu")
+        featureMenuItems.removeAll()
+        windowBehaviorMenuItems.removeAll()
+        sourceLanguageMenuItems.removeAll()
+        targetLanguageMenuItems.removeAll()
+        sourceLanguageRootItem = nil
+        targetLanguageRootItem = nil
+        languageSummaryItem = nil
+
+        let mainMenu = NSMenu(title: interfaceText("主菜单", "Main Menu"))
 
         let appMenuItem = NSMenuItem(title: "translate", action: nil, keyEquivalent: "")
         let appMenu = NSMenu(title: "translate")
@@ -78,7 +118,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(appMenuItem)
 
         let aboutItem = NSMenuItem(
-            title: "关于 translate",
+            title: interfaceText("关于 translate", "About translate"),
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""
         )
@@ -87,7 +127,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(.separator())
 
         let hideItem = NSMenuItem(
-            title: "隐藏 translate",
+            title: interfaceText("隐藏 translate", "Hide translate"),
             action: #selector(NSApplication.hide(_:)),
             keyEquivalent: "h"
         )
@@ -97,7 +137,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         appMenu.addItem(.separator())
         let quitItem = NSMenuItem(
-            title: "退出 translate",
+            title: interfaceText("退出 translate", "Quit translate"),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
@@ -105,35 +145,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = NSApp
         appMenu.addItem(quitItem)
 
-        let translationMenuItem = NSMenuItem(title: "翻译", action: nil, keyEquivalent: "")
-        let translationMenu = NSMenu(title: "翻译")
+        let translationTitle = interfaceText("翻译", "Translation")
+        let translationMenuItem = NSMenuItem(
+            title: translationTitle,
+            action: nil,
+            keyEquivalent: ""
+        )
+        let translationMenu = NSMenu(title: translationTitle)
         translationMenuItem.submenu = translationMenu
         mainMenu.addItem(translationMenuItem)
 
         let toggleItem = NSMenuItem(
-            title: "显示或隐藏窗口",
+            title: interfaceText("显示或隐藏窗口", "Show or Hide Window"),
             action: #selector(togglePanelFromMenu),
             keyEquivalent: "\\"
         )
         toggleItem.keyEquivalentModifierMask = [.command]
         toggleItem.target = self
         translationMenu.addItem(toggleItem)
-
-        // FloatingPanel's close() override hides and retains the window, so
-        // Command+W does not terminate the app and the global hotkey can show
-        // it again. The explicit target also works when WebKit owns focus.
-        let closeItem = NSMenuItem(
-            title: "关闭窗口",
-            action: #selector(closeWindowFromMenu(_:)),
-            keyEquivalent: "w"
-        )
-        closeItem.keyEquivalentModifierMask = [.command]
-        closeItem.target = self
-        translationMenu.addItem(closeItem)
         translationMenu.addItem(.separator())
 
         let copySourceItem = NSMenuItem(
-            title: "复制全部原文",
+            title: interfaceText("复制全部原文", "Copy All Source Text"),
             action: #selector(copyAllSourceFromMenu),
             keyEquivalent: ""
         )
@@ -141,7 +174,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         translationMenu.addItem(copySourceItem)
 
         let copyTranslationItem = NSMenuItem(
-            title: "复制全部译文",
+            title: interfaceText("复制全部译文", "Copy All Translation"),
             action: #selector(copyAllTranslationFromMenu),
             keyEquivalent: ""
         )
@@ -149,7 +182,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         translationMenu.addItem(copyTranslationItem)
 
         let swapItem = NSMenuItem(
-            title: "交换语言",
+            title: interfaceText("交换语言", "Swap Languages"),
             action: #selector(swapLanguagesFromMenu),
             keyEquivalent: "s"
         )
@@ -158,9 +191,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         translationMenu.addItem(swapItem)
 
         addLanguageMenu(to: mainMenu)
+        addInterfaceLanguageMenu(to: mainMenu)
 
-        let displayMenuItem = NSMenuItem(title: "显示", action: nil, keyEquivalent: "")
-        let displayMenu = NSMenu(title: "显示")
+        let displayTitle = interfaceText("显示", "Display")
+        let displayMenuItem = NSMenuItem(
+            title: displayTitle,
+            action: nil,
+            keyEquivalent: ""
+        )
+        let displayMenu = NSMenu(title: displayTitle)
         displayMenuItem.submenu = displayMenu
         mainMenu.addItem(displayMenuItem)
 
@@ -179,25 +218,161 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         displayMenu.addItem(.separator())
         let restoreItem = NSMenuItem(
-            title: "恢复推荐显示设置",
+            title: interfaceText(
+                "恢复推荐显示设置",
+                "Restore Recommended Display Settings"
+            ),
             action: #selector(restoreRecommendedFeatures),
             keyEquivalent: ""
         )
         restoreItem.target = self
         displayMenu.addItem(restoreItem)
 
+        addWindowMenu(to: mainMenu)
+        addShortcutMenu(to: mainMenu)
+
         NSApp.mainMenu = mainMenu
     }
 
+    private func addWindowMenu(to mainMenu: NSMenu) {
+        let windowTitle = interfaceText("窗口", "Window")
+        let windowMenuItem = NSMenuItem(
+            title: windowTitle,
+            action: nil,
+            keyEquivalent: ""
+        )
+        let windowMenu = NSMenu(title: windowTitle)
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+
+        // FloatingPanel.close() hides and retains the window, so Command+W
+        // never terminates the app and the global shortcut can show it again.
+        let closeItem = NSMenuItem(
+            title: interfaceText("关闭窗口", "Close Window"),
+            action: #selector(closeWindowFromMenu(_:)),
+            keyEquivalent: "w"
+        )
+        closeItem.keyEquivalentModifierMask = [.command]
+        closeItem.target = self
+        windowMenu.addItem(closeItem)
+        windowMenu.addItem(.separator())
+
+        TranslateWindowBehavior.allCases.forEach { behavior in
+            let item = NSMenuItem(
+                title: behavior.title,
+                action: #selector(toggleWindowBehaviorFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = behavior.rawValue
+            item.state = TranslateWindowPreferences.isEnabled(behavior) ? .on : .off
+            windowBehaviorMenuItems[behavior] = item
+            windowMenu.addItem(item)
+        }
+
+        windowMenu.addItem(.separator())
+        let restoreItem = NSMenuItem(
+            title: interfaceText(
+                "恢复默认窗口设置",
+                "Restore Default Window Settings"
+            ),
+            action: #selector(restoreDefaultWindowBehaviors),
+            keyEquivalent: ""
+        )
+        restoreItem.target = self
+        windowMenu.addItem(restoreItem)
+    }
+
+    private func addShortcutMenu(to mainMenu: NSMenu) {
+        let shortcutTitle = interfaceText("快捷键", "Shortcuts")
+        let shortcutMenuItem = NSMenuItem(
+            title: shortcutTitle,
+            action: nil,
+            keyEquivalent: ""
+        )
+        let shortcutMenu = NSMenu(title: shortcutTitle)
+        shortcutMenu.autoenablesItems = false
+        shortcutMenuItem.submenu = shortcutMenu
+        mainMenu.addItem(shortcutMenuItem)
+
+        [
+            interfaceText("显示或隐藏窗口 — ⌘\\", "Show or Hide Window — ⌘\\"),
+            interfaceText("关闭窗口 — ⌘W", "Close Window — ⌘W"),
+            interfaceText("隐藏应用 — ⌘H", "Hide Application — ⌘H"),
+            interfaceText("退出应用 — ⌘Q", "Quit Application — ⌘Q")
+        ].forEach { addShortcutReference($0, to: shortcutMenu) }
+
+        shortcutMenu.addItem(.separator())
+        [
+            interfaceText("选中全部原文 — ⌘A", "Select All Source Text — ⌘A"),
+            interfaceText("朗读原文 — ⌘L", "Listen to Source Text — ⌘L"),
+            interfaceText("交换语言 — ⌘S", "Swap Languages — ⌘S"),
+            interfaceText(
+                "应用 Google 拼写修正 — ⌘↩",
+                "Apply Google Spelling Correction — ⌘↩"
+            ),
+            interfaceText(
+                "将焦点移出翻译窗口 — ⇥",
+                "Move Focus out of Translation Window — ⇥"
+            )
+        ].forEach { addShortcutReference($0, to: shortcutMenu) }
+
+        shortcutMenu.addItem(.separator())
+        [
+            interfaceText("撤销 — ⌘Z", "Undo — ⌘Z"),
+            interfaceText("重做 — ⌘R", "Redo — ⌘R"),
+            interfaceText("剪切 — ⌘X", "Cut — ⌘X"),
+            interfaceText("复制所选文字 — ⌘C", "Copy Selected Text — ⌘C"),
+            interfaceText("粘贴 — ⌘V", "Paste — ⌘V")
+        ].forEach { addShortcutReference($0, to: shortcutMenu) }
+    }
+
+    private func addInterfaceLanguageMenu(to mainMenu: NSMenu) {
+        let menuTitle = interfaceText("界面语言", "Interface Language")
+        let menuItem = NSMenuItem(title: menuTitle, action: nil, keyEquivalent: "")
+        let menu = NSMenu(title: menuTitle)
+        menu.autoenablesItems = false
+        menuItem.submenu = menu
+        mainMenu.addItem(menuItem)
+
+        AppInterfaceLanguage.allCases.forEach { language in
+            let item = NSMenuItem(
+                title: language.nativeTitle,
+                action: #selector(setInterfaceLanguageFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = language.rawValue
+            item.state = language == AppInterfaceLanguagePreferences.current ? .on : .off
+            menu.addItem(item)
+        }
+    }
+
+    private func addShortcutReference(_ title: String, to menu: NSMenu) {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = true
+        menu.addItem(item)
+    }
+
     private func addLanguageMenu(to mainMenu: NSMenu) {
-        let languageMenuItem = NSMenuItem(title: "语言", action: nil, keyEquivalent: "")
-        let languageMenu = NSMenu(title: "语言")
+        let languageTitle = interfaceText("语言", "Languages")
+        let languageMenuItem = NSMenuItem(
+            title: languageTitle,
+            action: nil,
+            keyEquivalent: ""
+        )
+        let languageMenu = NSMenu(title: languageTitle)
         languageMenu.autoenablesItems = false
         languageMenuItem.submenu = languageMenu
         mainMenu.addItem(languageMenuItem)
 
-        let sourceRootItem = NSMenuItem(title: "默认源语言", action: nil, keyEquivalent: "")
-        let sourceMenu = NSMenu(title: "默认源语言")
+        let sourceTitle = interfaceText("默认源语言", "Default Source Language")
+        let sourceRootItem = NSMenuItem(
+            title: sourceTitle,
+            action: nil,
+            keyEquivalent: ""
+        )
+        let sourceMenu = NSMenu(title: sourceTitle)
         sourceMenu.autoenablesItems = false
         sourceRootItem.submenu = sourceMenu
         sourceLanguageRootItem = sourceRootItem
@@ -215,8 +390,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             sourceMenu.addItem(item)
         }
 
-        let targetRootItem = NSMenuItem(title: "默认目标语言", action: nil, keyEquivalent: "")
-        let targetMenu = NSMenu(title: "默认目标语言")
+        let targetTitle = interfaceText("默认目标语言", "Default Target Language")
+        let targetRootItem = NSMenuItem(
+            title: targetTitle,
+            action: nil,
+            keyEquivalent: ""
+        )
+        let targetMenu = NSMenu(title: targetTitle)
         targetMenu.autoenablesItems = false
         targetRootItem.submenu = targetMenu
         targetLanguageRootItem = targetRootItem
@@ -241,7 +421,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         languageMenu.addItem(summaryItem)
 
         let applyItem = NSMenuItem(
-            title: "应用默认语言",
+            title: interfaceText("应用默认语言", "Apply Default Languages"),
             action: #selector(applyDefaultLanguagesFromMenu),
             keyEquivalent: ""
         )
@@ -249,7 +429,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         languageMenu.addItem(applyItem)
 
         let restoreItem = NSMenuItem(
-            title: "恢复为英语 → 中文（简体）",
+            title: interfaceText(
+                "恢复为英语 → 中文（简体）",
+                "Restore English → Chinese (Simplified)"
+            ),
             action: #selector(restoreInitialLanguagesFromMenu),
             keyEquivalent: ""
         )
@@ -270,9 +453,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             item.state = language == target ? .on : .off
         }
 
-        sourceLanguageRootItem?.title = "默认源语言：\(source.title)"
-        targetLanguageRootItem?.title = "默认目标语言：\(target.title)"
-        languageSummaryItem?.title = "当前默认：\(source.title) → \(target.title)"
+        sourceLanguageRootItem?.title = interfaceText(
+            "默认源语言：\(source.title)",
+            "Default Source Language: \(source.title)"
+        )
+        targetLanguageRootItem?.title = interfaceText(
+            "默认目标语言：\(target.title)",
+            "Default Target Language: \(target.title)"
+        )
+        languageSummaryItem?.title = interfaceText(
+            "当前默认：\(source.title) → \(target.title)",
+            "Current Default: \(source.title) → \(target.title)"
+        )
+    }
+
+    @objc private func setInterfaceLanguageFromMenu(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let language = AppInterfaceLanguage(rawValue: rawValue),
+              language != AppInterfaceLanguagePreferences.current else {
+            return
+        }
+
+        AppInterfaceLanguagePreferences.set(language)
+
+        // Replace the menu after AppKit finishes dispatching the action from
+        // the currently open menu, then reload only the page locale while
+        // preserving the source text and the current language pair.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.setupMainMenu()
+            self.viewController?.applyInterfaceLanguagePreservingSource()
+        }
     }
 
     @objc private func togglePanelFromMenu() {
@@ -285,6 +496,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             panel?.close()
         }
+    }
+
+    @objc private func toggleWindowBehaviorFromMenu(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let behavior = TranslateWindowBehavior(rawValue: rawValue) else {
+            return
+        }
+
+        let enabled = !TranslateWindowPreferences.isEnabled(behavior)
+        TranslateWindowPreferences.set(behavior, enabled: enabled)
+        sender.state = enabled ? .on : .off
+
+        // Registering canJoinAllApplications while temporarily accessory is
+        // what lets this already-created panel join another app's full-screen
+        // Space. Restore the regular policy immediately so menus and Dock
+        // behavior remain unchanged for the user.
+        let restoreRegularPolicy = behavior == .showOnAllSpaces &&
+            enabled && NSApp.activationPolicy() == .regular
+        if restoreRegularPolicy {
+            NSApp.setActivationPolicy(.accessory)
+        }
+        panel?.applyWindowBehaviorPreferences()
+        if restoreRegularPolicy {
+            NSApp.setActivationPolicy(.regular)
+        }
+    }
+
+    @objc private func restoreDefaultWindowBehaviors() {
+        TranslateWindowPreferences.restoreDefaults()
+        TranslateWindowBehavior.allCases.forEach { behavior in
+            windowBehaviorMenuItems[behavior]?.state = .off
+        }
+        panel?.applyWindowBehaviorPreferences()
     }
 
     @objc private func copyAllSourceFromMenu() {

@@ -10,20 +10,20 @@ import AppKit
 class FloatingPanel: NSPanel {
     public var isPresented = false
     public var isDragged = false
+    private var hasPendingPresentation = false
     
     required init() {
         let styleMask: StyleMask = [.resizable, .titled, .closable, .fullSizeContentView]
         
         super.init(contentRect: .zero, styleMask: styleMask, backing: .buffered, defer: false)
         
-        // This is a normal window.  It is raised explicitly by toggle() and
-        // therefore never remains permanently above other applications.
-        level = .normal
+        // Keep an activatable normal panel; the optional always-on-top
+        // behavior is controlled only through the native Window menu.
         isFloatingPanel = false
         hidesOnDeactivate = false
         isMovableByWindowBackground = false
         contentViewController = ViewController()
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        applyWindowBehaviorPreferences()
         
         backgroundColor = .clear
         titleVisibility = .hidden
@@ -39,12 +39,71 @@ class FloatingPanel: NSPanel {
         center()
     }
     
-    public func toggle() {
+    public func applyWindowBehaviorPreferences() {
+        level = TranslateWindowPreferences.keepOnTop ? .floating : .normal
+
+        var behavior: CollectionBehavior = [.managed, .participatesInCycle]
+        if TranslateWindowPreferences.showOnAllSpaces {
+            behavior.insert(.canJoinAllSpaces)
+            if #available(macOS 13.0, *) {
+                // Unlike canJoinAllSpaces, this explicitly allows the panel
+                // to join another application's full-screen Space.
+                behavior.insert(.canJoinAllApplications)
+            } else {
+                // macOS 12 has no cross-application equivalent; this is the
+                // closest available full-screen compatibility behavior.
+                behavior.insert(.fullScreenAuxiliary)
+            }
+        } else {
+            behavior.insert(.moveToActiveSpace)
+        }
+        collectionBehavior = behavior
+    }
+
+    public func presentWhenReady() {
         let controller = contentViewController as! ViewController
-        
-        if !controller.isReady {
+
+        if controller.isReady {
+            presentNow()
             return
         }
+
+        guard !hasPendingPresentation else { return }
+        hasPendingPresentation = true
+        controller.whenReady { [weak self] in
+            guard let self, self.hasPendingPresentation else { return }
+            self.presentNow()
+        }
+    }
+
+    private func presentNow() {
+        hasPendingPresentation = false
+        let controller = contentViewController as! ViewController
+
+        // A regular foreground app is moved out of another application's
+        // full-screen Space when activated. Temporarily use the accessory
+        // policy while registering and ordering an all-Spaces panel, then
+        // restore the normal policy immediately after it is onscreen.
+        let restoreRegularPolicy = TranslateWindowPreferences.showOnAllSpaces &&
+            NSApp.activationPolicy() == .regular
+        if restoreRegularPolicy {
+            NSApp.setActivationPolicy(.accessory)
+        }
+        defer {
+            if restoreRegularPolicy {
+                NSApp.setActivationPolicy(.regular)
+            }
+        }
+
+        applyWindowBehaviorPreferences()
+        isPresented = true
+        NSApp.activate(ignoringOtherApps: true)
+        makeKeyAndOrderFront(nil)
+        controller.focusAndSelectField()
+    }
+
+    public func toggle() {
+        let controller = contentViewController as! ViewController
         
         // If the window is both visible and frontmost, the shortcut hides it.
         // If another application is frontmost, the same shortcut brings this
@@ -56,13 +115,15 @@ class FloatingPanel: NSPanel {
             return
         }
 
-        isPresented = true
-        NSApp.activate(ignoringOtherApps: true)
-        makeKeyAndOrderFront(nil)
-        controller.focusAndSelectField()
+        if controller.isReady {
+            presentNow()
+        } else {
+            presentWhenReady()
+        }
     }
     
     override func close() {
+        hasPendingPresentation = false
         isPresented = false
         orderOut(nil)
     }

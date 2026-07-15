@@ -29,16 +29,33 @@ after temporarily changing languages inside Google Translate, or use
 **Restore English → Chinese (Simplified)**
 (`恢复为英语 → 中文（简体）`) to restore the initial pair.
 
+The translation window opens automatically on a cold launch. Under the native
+**Window** (`窗口`) menu, both **Keep on Top in the Current Space** and
+**Show on All Spaces** are disabled by default and can be enabled independently.
+On macOS 13 or later, **Show on All Spaces** also allows the window to be
+summoned over another application's full-screen Space.
+
+Use the native **Interface Language** (`界面语言`) menu to switch all native
+menus and Google Translate's source/target language labels between Simplified
+Chinese and English. Simplified Chinese is the initial interface language, and
+the selection is saved for future launches. Changing the interface language
+preserves the current source text and temporary translation direction.
+
 ## Keybindings
 
 | Shortcuts                                   | Functionality        |
 | ------------------------------------------- | -------------------- |
-| `ESC`                     			      | Hide Panel           |
-| `Tab`                     			      | Focus Last App       |
-| `CMD + \`                     			  | Toggle Panel - Focus |
-| `CMD + L`                     			  | Listen Source        |
-| `CMD + S`                     			  | Swap Languages       |
-| `CMD + Enter`                     		  | Fix Typo             |
+| `Tab` | Move focus out of the translation window |
+| `CMD + \` | Show or hide the window globally |
+| `CMD + W` | Close the window without quitting |
+| `CMD + H` | Hide the application |
+| `CMD + Q` | Quit the application |
+| `CMD + A` | Select all source text |
+| `CMD + L` | Listen to the source text |
+| `CMD + S` | Swap languages |
+| `CMD + Enter` | Apply Google's spelling correction when available |
+| `CMD + Z` / `CMD + R` | Undo / redo |
+| `CMD + X` / `CMD + C` / `CMD + V` | Cut / copy / paste |
 
 ## Native menus
 
@@ -47,6 +64,9 @@ after temporarily changing languages inside Google Translate, or use
 | `翻译` | Show or hide the panel, copy all source/result text, swap languages |
 | `语言` | Configure, apply, or restore the persistent default language pair |
 | `显示` | Enable or disable the customized compact-interface features |
+| `窗口` | Close the window and configure current-Space or all-Spaces behavior |
+| `快捷键` | Display every keyboard shortcut currently implemented by the app |
+| `界面语言` | Switch all native menus and Google language labels between Chinese and English |
 
 ### Reporting Issues
 If believe you've found an issue, please [report it](https://github.com/m-inan/mac-translate/issues) along with any relevant details to reproduce it.

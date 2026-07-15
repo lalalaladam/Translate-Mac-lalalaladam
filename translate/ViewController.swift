@@ -10,9 +10,11 @@ class ViewController: NSViewController, WKNavigationDelegate {
     private enum ReloadDestination {
         case currentPage
         case defaultLanguages
+        case interfaceLanguage
     }
 
     public var isReady = false
+    private var readyHandlers: [() -> Void] = []
 
     var webView: WKWebView!
     var visualEffect: NSVisualEffectView!
@@ -23,6 +25,21 @@ class ViewController: NSViewController, WKNavigationDelegate {
     var isDarkMode: Bool {
         let mode = UserDefaults.standard.string(forKey: "AppleInterfaceStyle")
         return mode == "Dark"
+    }
+
+    public func whenReady(_ handler: @escaping () -> Void) {
+        if isReady {
+            handler()
+        } else {
+            readyHandlers.append(handler)
+        }
+    }
+
+    private func markReady() {
+        isReady = true
+        let handlers = readyHandlers
+        readyHandlers.removeAll()
+        handlers.forEach { $0() }
     }
 
     private func installUserScripts(on controller: WKUserContentController) {
@@ -222,9 +239,35 @@ class ViewController: NSViewController, WKNavigationDelegate {
                 name: "tl",
                 value: TranslateLanguagePreferences.target.rawValue
             ),
+            URLQueryItem(
+                name: "hl",
+                value: AppInterfaceLanguagePreferences.current.googleLocale
+            ),
             URLQueryItem(name: "op", value: "translate")
         ]
         return components.url!
+    }
+
+    private func interfaceLocalizedURL(from currentURL: URL?) -> URL {
+        guard let currentURL,
+              var components = URLComponents(
+                url: currentURL,
+                resolvingAgainstBaseURL: false
+              ),
+              components.host == "translate.google.com" else {
+            return defaultTranslationURL()
+        }
+
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "hl" }
+        queryItems.append(
+            URLQueryItem(
+                name: "hl",
+                value: AppInterfaceLanguagePreferences.current.googleLocale
+            )
+        )
+        components.queryItems = queryItems
+        return components.url ?? defaultTranslationURL()
     }
 
     override func loadView() {
@@ -304,6 +347,7 @@ class ViewController: NSViewController, WKNavigationDelegate {
         let highlightSelectedLanguage = TranslateFeaturePreferences.highlightSelectedLanguage
             ? "true"
             : "false"
+        let sourceCopyLabel = interfaceText("复制原文", "Copy Source Text")
 
         // Google changes its generated class names frequently.  This script
         // uses stable accessibility markers where possible and also performs
@@ -466,6 +510,7 @@ class ViewController: NSViewController, WKNavigationDelegate {
                         .QcsUad a[aria-label*="Google" i],
                         .QcsUad a[href*="google.com/search" i],
                         [aria-label="发送反馈"],
+                        [aria-label="Send feedback"],
                         [jsname="N7Eqid"],
                         .feedback-link {
                             display: none !important;
@@ -558,8 +603,10 @@ class ViewController: NSViewController, WKNavigationDelegate {
                 };
 
                 const isFeedbackElement = (element) => {
-                    return (element.getAttribute("aria-label") || "").trim() === "发送反馈" ||
-                        textOf(element) === "发送反馈";
+                    const label = (element.getAttribute("aria-label") || "").trim();
+                    const text = textOf(element);
+                    return /^(发送反馈|Send feedback)$/i.test(label) ||
+                        /^(发送反馈|Send feedback)$/i.test(text);
                 };
 
                 const copyActionPattern = /(copy translation|copy|content_copy|复制译文|复制翻译|复制)/i;
@@ -609,8 +656,8 @@ class ViewController: NSViewController, WKNavigationDelegate {
                         element.removeAttribute("data-mac-translate-hidden");
                     });
                     button.id = "mac-translate-source-copy";
-                    button.setAttribute("aria-label", "复制原文");
-                    button.setAttribute("title", "复制原文");
+                    button.setAttribute("aria-label", "\#(sourceCopyLabel)");
+                    button.setAttribute("title", "\#(sourceCopyLabel)");
                     button.removeAttribute("data-tooltip");
 
                     slot.appendChild(button);
@@ -916,14 +963,17 @@ class ViewController: NSViewController, WKNavigationDelegate {
 
                 cleanup();
             })();
-        """#, completionHandler: nil)
-
-        self.setTheme()
-        restorePendingSourceTextIfNeeded()
-        isReady = true
+        """#) { [weak self] _, _ in
+            guard let self else { return }
+            self.setTheme { [weak self] in
+                guard let self else { return }
+                self.restorePendingSourceTextIfNeeded()
+                self.markReady()
+            }
+        }
     }
 
-    func setTheme() {
+    func setTheme(completion: (() -> Void)? = nil) {
         visualEffect.material = isDarkMode ? .dark : .light
         let color = isDarkMode ? "white" : "black"
         let selectedLanguageColor = isDarkMode ? "#A8C7FA" : "#0B57D0"
@@ -965,7 +1015,9 @@ class ViewController: NSViewController, WKNavigationDelegate {
                     border: none !important;
                 }
             `;
-        """#, completionHandler: nil)
+        """#) { _, _ in
+            completion?()
+        }
     }
 
     public func focusAndSelectField() {
@@ -988,6 +1040,10 @@ class ViewController: NSViewController, WKNavigationDelegate {
         reloadPreservingSource(for: .defaultLanguages)
     }
 
+    public func applyInterfaceLanguagePreservingSource() {
+        reloadPreservingSource(for: .interfaceLanguage)
+    }
+
     private func reloadPreservingSource(for destination: ReloadDestination) {
         reloadRequestGeneration += 1
         let generation = reloadRequestGeneration
@@ -1008,6 +1064,12 @@ class ViewController: NSViewController, WKNavigationDelegate {
                     self.webView.reload()
                 case .defaultLanguages:
                     self.webView.load(URLRequest(url: self.defaultTranslationURL()))
+                case .interfaceLanguage:
+                    self.webView.load(
+                        URLRequest(
+                            url: self.interfaceLocalizedURL(from: self.webView.url)
+                        )
+                    )
                 }
             }
         }
