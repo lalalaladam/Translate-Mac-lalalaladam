@@ -24,9 +24,12 @@ This document compares the original `mac-translate` project by [m-inan](https://
 | Native selection menu | WebKit and Google selection menus may appear | Native context menus, Quick Look, and dictionary presentation are suppressed | Keeps text selection and `Command + C` while removing unwanted popovers |
 | Feedback control | Uses a limited legacy feedback selector | Handles current accessibility labels, `jsname` values, and dynamic DOM changes | Removes the “Send feedback” control more reliably |
 | Selected languages | Uses Google’s default language-tab appearance | Selected languages use bold text, blue color, background, and underline | Active translation directions are easier to identify |
+| Default language pair | Hard-coded as English → Turkish and requires editing source code to change | Configurable from the native `语言` menu; initially English → Simplified Chinese | Default languages can be changed without rebuilding the app |
+| Language preference persistence | Does not store a user-configured default language pair | Saves the selected source and target languages in `UserDefaults` | The preferred pair is restored after relaunching the app |
+| Language switching safety | No native validation for a configurable pair | Automatic detection is source-only, and choosing the same language on both sides swaps the other side | Prevents invalid or ambiguous default language combinations |
 | DOM-change handling | Injects mostly static CSS after page loading | Uses document-start guards, a `MutationObserver`, stable attributes, and repeated cleanup | More resistant to Google Translate interface changes |
 | Navigation control | Does not explicitly restrict secondary navigation | Only the main Google Translate page is allowed | Prevents unintended detail or external-page navigation |
-| macOS application menu | Does not create a complete native main menu | Adds `translate`, `翻译`, and `显示` menus | Custom features are accessible from the macOS menu bar |
+| macOS application menu | Does not create a complete native main menu | Adds `translate`, `翻译`, `语言`, and `显示` menus | Custom features are accessible from the macOS menu bar |
 | `Command + Q` | No reliable native Quit menu item | Adds a Quit item targeting `NSApplication.terminate` | `Command + Q` fully terminates the application |
 | Display customization | Interface changes are hard-coded | Four checkable display options control pinyin, selection toolbar, action buttons, and language highlighting | Visual customizations can be enabled or disabled |
 | Settings persistence | No customization preferences | Stores display preferences in `UserDefaults` | Settings survive application restarts |

@@ -7,12 +7,18 @@ import Cocoa
 import WebKit
 
 class ViewController: NSViewController, WKNavigationDelegate {
+    private enum ReloadDestination {
+        case currentPage
+        case defaultLanguages
+    }
+
     public var isReady = false
 
     var webView: WKWebView!
     var visualEffect: NSVisualEffectView!
     private var pendingSourceTextForReload: String?
     private var pendingSourceRestoreAttempts = 0
+    private var reloadRequestGeneration = 0
 
     var isDarkMode: Bool {
         let mode = UserDefaults.standard.string(forKey: "AppleInterfaceStyle")
@@ -117,11 +123,25 @@ class ViewController: NSViewController, WKNavigationDelegate {
         controller.addUserScript(interactionGuard)
     }
 
+    private func defaultTranslationURL() -> URL {
+        var components = URLComponents(string: "https://translate.google.com/")!
+        components.queryItems = [
+            URLQueryItem(
+                name: "sl",
+                value: TranslateLanguagePreferences.source.rawValue
+            ),
+            URLQueryItem(
+                name: "tl",
+                value: TranslateLanguagePreferences.target.rawValue
+            ),
+            URLQueryItem(name: "op", value: "translate")
+        ]
+        return components.url!
+    }
+
     override func loadView() {
         let width = Constants.WIDTH
         let height = Constants.HEIGHT
-        let source = Constants.SOURCE_LANGUAGE
-        let translation = Constants.TRANSLATION_LANGUAGE
 
         let config = WKWebViewConfiguration()
         config.userContentController.add(self, name: "callbackHandler")
@@ -133,8 +153,7 @@ class ViewController: NSViewController, WKNavigationDelegate {
         )
         webView.navigationDelegate = self
 
-        let url = URL(string: "https://translate.google.com/?sl=\(source)&tl=\(translation)")!
-        webView.load(URLRequest(url: url))
+        webView.load(URLRequest(url: defaultTranslationURL()))
 
         webView.wantsLayer = true
         webView.layer?.backgroundColor = .clear
@@ -838,14 +857,35 @@ class ViewController: NSViewController, WKNavigationDelegate {
     }
 
     public func reloadWithCurrentPreferences() {
+        reloadPreservingSource(for: .currentPage)
+    }
+
+    public func applyDefaultLanguagesPreservingSource() {
+        reloadPreservingSource(for: .defaultLanguages)
+    }
+
+    private func reloadPreservingSource(for destination: ReloadDestination) {
+        reloadRequestGeneration += 1
+        let generation = reloadRequestGeneration
+
         webView.evaluateJavaScript("document.querySelector('textarea')?.value || ''") {
             [weak self] result, _ in
             guard let self else { return }
-            self.pendingSourceTextForReload = result as? String ?? ""
-            self.pendingSourceRestoreAttempts = 0
-            self.installUserScripts(on: self.webView.configuration.userContentController)
-            self.isReady = false
-            self.webView.reload()
+
+            DispatchQueue.main.async {
+                guard generation == self.reloadRequestGeneration else { return }
+                self.pendingSourceTextForReload = result as? String ?? ""
+                self.pendingSourceRestoreAttempts = 0
+                self.installUserScripts(on: self.webView.configuration.userContentController)
+                self.isReady = false
+
+                switch destination {
+                case .currentPage:
+                    self.webView.reload()
+                case .defaultLanguages:
+                    self.webView.load(URLRequest(url: self.defaultTranslationURL()))
+                }
+            }
         }
     }
 

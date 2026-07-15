@@ -18,18 +18,16 @@ Go to `System Preferences > Privacy & Security` and there should be a button say
 
 ## Configuration
 
-	
-```swift
-// Constants.swift
-struct Constants {
-    static let WIDTH = 600
-    static let HEIGHT = 334
-    static let SOURCE_LANGUAGE = "en" 
-    static let TRANSLATION_LANGUAGE = "tr"
-    static let key: Key = .backslash
-    static let modifiers: NSEvent.ModifierFlags = .command
-}
-```
+The initial translation direction is **English → Chinese (Simplified)**.
+
+Use the native macOS menu **Language** (`语言`) to choose the default source
+and target languages. The selected pair is saved and restored when the app is
+opened again. Automatic detection is available for the source language only.
+
+Use **Apply Default Languages** (`应用默认语言`) to return to the saved pair
+after temporarily changing languages inside Google Translate, or use
+**Restore English → Chinese (Simplified)**
+(`恢复为英语 → 中文（简体）`) to restore the initial pair.
 
 ## Keybindings
 
@@ -41,6 +39,14 @@ struct Constants {
 | `CMD + L`                     			  | Listen Source        |
 | `CMD + S`                     			  | Swap Languages       |
 | `CMD + Enter`                     		  | Fix Typo             |
+
+## Native menus
+
+| Menu | Functionality |
+| --- | --- |
+| `翻译` | Show or hide the panel, copy all source/result text, swap languages |
+| `语言` | Configure, apply, or restore the persistent default language pair |
+| `显示` | Enable or disable the customized compact-interface features |
 
 ### Reporting Issues
 If believe you've found an issue, please [report it](https://github.com/m-inan/mac-translate/issues) along with any relevant details to reproduce it.
