@@ -63,6 +63,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusBarItem.button {
             button.image = NSImage(named: "icon")
             button.action = #selector(statusBarItemPressed)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         
         registerGlobalShortcut()
@@ -92,7 +93,62 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc func statusBarItemPressed() {
-        self.panel.toggle()
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showStatusBarMenu()
+        } else {
+            panel.toggle()
+        }
+    }
+
+    private func showStatusBarMenu() {
+        guard let button = statusBarItem.button else { return }
+
+        let menu = NSMenu(title: "Translate")
+
+        let toggleItem = NSMenuItem(
+            title: interfaceText("显示或隐藏窗口", "Show or Hide Window"),
+            action: #selector(togglePanelFromMenu),
+            keyEquivalent: ""
+        )
+        toggleItem.target = self
+        menu.addItem(toggleItem)
+        menu.addItem(.separator())
+
+        TranslateWindowBehavior.allCases.forEach { behavior in
+            let item = NSMenuItem(
+                title: behavior.title,
+                action: #selector(toggleWindowBehaviorFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = behavior.rawValue
+            item.state = TranslateWindowPreferences.isEnabled(behavior) ? .on : .off
+            menu.addItem(item)
+        }
+
+        menu.addItem(.separator())
+        let shortcutsItem = NSMenuItem(
+            title: interfaceText("快捷键设置…", "Shortcut Settings…"),
+            action: #selector(showShortcutSettings),
+            keyEquivalent: ""
+        )
+        shortcutsItem.target = self
+        menu.addItem(shortcutsItem)
+
+        menu.addItem(.separator())
+        let quitItem = NSMenuItem(
+            title: interfaceText("退出 Translate", "Quit Translate"),
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: ""
+        )
+        quitItem.target = NSApp
+        menu.addItem(quitItem)
+
+        menu.popUp(
+            positioning: nil,
+            at: NSPoint(x: 0, y: button.bounds.height + 4),
+            in: button
+        )
     }
 
     private var viewController: ViewController? {
@@ -127,13 +183,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let mainMenu = NSMenu(title: interfaceText("主菜单", "Main Menu"))
 
-        let appMenuItem = NSMenuItem(title: "Tranlate", action: nil, keyEquivalent: "")
-        let appMenu = NSMenu(title: "Tranlate")
+        let appMenuItem = NSMenuItem(title: "Translate", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu(title: "Translate")
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
         let aboutItem = NSMenuItem(
-            title: interfaceText("关于 Tranlate", "About Tranlate"),
+            title: interfaceText("关于 Translate", "About Translate"),
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""
         )
@@ -187,7 +243,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         appMenu.addItem(.separator())
         let hideItem = NSMenuItem(
-            title: interfaceText("隐藏 Tranlate", "Hide Tranlate"),
+            title: interfaceText("隐藏 Translate", "Hide Translate"),
             action: #selector(NSApplication.hide(_:)),
             keyEquivalent: ""
         )
@@ -197,7 +253,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         appMenu.addItem(.separator())
         let quitItem = NSMenuItem(
-            title: interfaceText("退出 Tranlate", "Quit Tranlate"),
+            title: interfaceText("退出 Translate", "Quit Translate"),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: ""
         )
@@ -446,6 +502,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.setupMainMenu()
+            self.viewController?.syncWindowBehaviorControls()
             self.viewController?.applyInterfaceLanguagePreservingSource()
         }
     }
@@ -484,21 +541,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let enabled = !TranslateWindowPreferences.isEnabled(behavior)
-        TranslateWindowPreferences.set(behavior, enabled: enabled)
+        setWindowBehavior(behavior, enabled: enabled)
         sender.state = enabled ? .on : .off
+    }
 
-        // Registering canJoinAllApplications while temporarily accessory is
-        // what lets this already-created panel join another app's full-screen
-        // Space. Restore the regular policy immediately so menus and Dock
-        // behavior remain unchanged for the user.
-        let restoreRegularPolicy = behavior == .showOnAllSpaces &&
-            enabled && NSApp.activationPolicy() == .regular
-        if restoreRegularPolicy {
-            NSApp.setActivationPolicy(.accessory)
+    func setWindowBehavior(
+        _ behavior: TranslateWindowBehavior,
+        enabled: Bool
+    ) {
+        TranslateWindowPreferences.set(behavior, enabled: enabled)
+        windowBehaviorMenuItems[behavior]?.state = enabled ? .on : .off
+        viewController?.syncWindowBehaviorControls()
+
+        // The panel was created while the app used accessory policy, so it is
+        // already eligible for full-screen Spaces. Changing the application's
+        // activation policy here can make macOS move the window—or the user—to
+        // another desktop.
+        if behavior == .showOnAllSpaces {
+            recreatePanelForSpaceModeChange()
+        } else {
+            panel?.applyWindowBehaviorPreferences()
         }
-        panel?.applyWindowBehaviorPreferences()
-        if restoreRegularPolicy {
-            NSApp.setActivationPolicy(.regular)
+    }
+
+    private func recreatePanelForSpaceModeChange() {
+        guard let oldPanel = panel else { return }
+
+        let frame = oldPanel.frame
+        let wasVisible = oldPanel.isVisible
+        let wasPresented = oldPanel.isPresented
+        let controller = oldPanel.contentViewController
+
+        oldPanel.orderOut(nil)
+
+        let replacement = FloatingPanel()
+        replacement.contentViewController = controller
+        replacement.setFrame(frame, display: false)
+        replacement.isPresented = wasPresented
+        panel = replacement
+
+        if wasVisible {
+            replacement.presentWhenReady()
         }
     }
 
@@ -508,6 +591,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             windowBehaviorMenuItems[behavior]?.state = .off
         }
         panel?.applyWindowBehaviorPreferences()
+        viewController?.syncWindowBehaviorControls()
     }
 
     @objc private func copyAllSourceFromMenu() {

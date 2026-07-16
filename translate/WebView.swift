@@ -18,6 +18,17 @@ final class WindowDragHandleView: NSView {
     }
 }
 
+final class WindowBehaviorBarView: NSVisualEffectView {
+    override func mouseDown(with event: NSEvent) {
+        // Child controls receive their own mouse events. Only clicks in the
+        // otherwise empty part of the bar reach this view and begin a drag.
+        window?.performDrag(with: event)
+    }
+
+    // Keep the standard arrow cursor. A hand cursor makes the empty drag area
+    // look like a selectable web control rather than a normal window surface.
+}
+
 class WebView: WKWebView {
     // The view controller performs page-specific actions such as selecting
     // source text or pressing Google's listen button. Keeping the mapping in

@@ -19,7 +19,7 @@
 
 /* Begin PBXFileReference section */
 		E95944262978E9DD00C83B92 /* FloatingPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingPanel.swift; sourceTree = "<group>"; };
-		E971B78529743F7900375242 /* Tranlate.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tranlate.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E971B78529743F7900375242 /* Translate.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Translate.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E971B78829743F7900375242 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		E971B78A29743F7900375242 /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
 		E971B78C29743F7B00375242 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -52,7 +52,7 @@
 		E971B78629743F7900375242 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				E971B78529743F7900375242 /* Tranlate.app */,
+				E971B78529743F7900375242 /* Translate.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -89,8 +89,8 @@
 			dependencies = (
 			);
 			name = translate;
-			productName = Tranlate;
-			productReference = E971B78529743F7900375242 /* Tranlate.app */;
+			productName = Translate;
+			productReference = E971B78529743F7900375242 /* Translate.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -276,7 +276,7 @@
 				CODE_SIGN_ENTITLEMENTS = translate/translate.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_TEAM = TH24236SE5;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -287,10 +287,10 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.4;
-				MARKETING_VERSION = 1.2.12;
+				MARKETING_VERSION = 1.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tilpark.translate;
-				PRODUCT_NAME = Tranlate;
-				INFOPLIST_KEY_CFBundleDisplayName = Tranlate;
+				PRODUCT_NAME = Translate;
+				INFOPLIST_KEY_CFBundleDisplayName = Translate;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -304,7 +304,7 @@
 				CODE_SIGN_ENTITLEMENTS = translate/translate.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_TEAM = TH24236SE5;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -315,10 +315,10 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.4;
-				MARKETING_VERSION = 1.2.12;
+				MARKETING_VERSION = 1.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tilpark.translate;
-				PRODUCT_NAME = Tranlate;
-				INFOPLIST_KEY_CFBundleDisplayName = Tranlate;
+				PRODUCT_NAME = Translate;
+				INFOPLIST_KEY_CFBundleDisplayName = Translate;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 			};
