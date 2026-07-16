@@ -12,11 +12,220 @@ import Carbon.HIToolbox
 struct Constants {
     static let WIDTH = 550
     static let HEIGHT = 360
-    
-    // Command + backslash is registered at the Carbon level so it continues
-    // to work while another application is active.
-    static let keyCode: UInt32 = UInt32(kVK_ANSI_Backslash)
-    static let carbonModifiers: UInt32 = UInt32(cmdKey)
+}
+
+enum ShortcutAction: String, CaseIterable {
+    case showHideWindow
+    case closeWindow
+    case hideApplication
+    case quitApplication
+    case selectAllSource
+    case listenSource
+    case swapLanguages
+    case applySpellingCorrection
+    case moveFocusOut
+    case undo
+    case redo
+    case cut
+    case copy
+    case paste
+
+    var title: String {
+        switch self {
+        case .showHideWindow:
+            return interfaceText("显示或隐藏窗口", "Show or Hide Window")
+        case .closeWindow:
+            return interfaceText("关闭窗口", "Close Window")
+        case .hideApplication:
+            return interfaceText("隐藏应用", "Hide Application")
+        case .quitApplication:
+            return interfaceText("退出应用", "Quit Application")
+        case .selectAllSource:
+            return interfaceText("选中全部原文", "Select All Source Text")
+        case .listenSource:
+            return interfaceText("朗读原文", "Listen to Source Text")
+        case .swapLanguages:
+            return interfaceText("交换语言", "Swap Languages")
+        case .applySpellingCorrection:
+            return interfaceText("应用 Google 拼写修正", "Apply Google Spelling Correction")
+        case .moveFocusOut:
+            return interfaceText("将焦点移出翻译窗口", "Move Focus out of Translation Window")
+        case .undo:
+            return interfaceText("撤销", "Undo")
+        case .redo:
+            return interfaceText("重做", "Redo")
+        case .cut:
+            return interfaceText("剪切", "Cut")
+        case .copy:
+            return interfaceText("复制所选文字", "Copy Selected Text")
+        case .paste:
+            return interfaceText("粘贴", "Paste")
+        }
+    }
+
+    var defaultBinding: ShortcutBinding {
+        switch self {
+        case .showHideWindow:
+            return ShortcutBinding(keyCode: kVK_ANSI_Backslash, modifiers: [.command], keyEquivalent: "\\")
+        case .closeWindow:
+            return ShortcutBinding(keyCode: kVK_ANSI_W, modifiers: [.command], keyEquivalent: "w")
+        case .hideApplication:
+            return ShortcutBinding(keyCode: kVK_ANSI_H, modifiers: [.command], keyEquivalent: "h")
+        case .quitApplication:
+            return ShortcutBinding(keyCode: kVK_ANSI_Q, modifiers: [.command], keyEquivalent: "q")
+        case .selectAllSource:
+            return ShortcutBinding(keyCode: kVK_ANSI_A, modifiers: [.command], keyEquivalent: "a")
+        case .listenSource:
+            return ShortcutBinding(keyCode: kVK_ANSI_L, modifiers: [.command], keyEquivalent: "l")
+        case .swapLanguages:
+            return ShortcutBinding(keyCode: kVK_ANSI_S, modifiers: [.command], keyEquivalent: "s")
+        case .applySpellingCorrection:
+            return ShortcutBinding(keyCode: kVK_Return, modifiers: [.command], keyEquivalent: "\r")
+        case .moveFocusOut:
+            return ShortcutBinding(keyCode: kVK_Tab, modifiers: [], keyEquivalent: "\t")
+        case .undo:
+            return ShortcutBinding(keyCode: kVK_ANSI_Z, modifiers: [.command], keyEquivalent: "z")
+        case .redo:
+            return ShortcutBinding(keyCode: kVK_ANSI_R, modifiers: [.command], keyEquivalent: "r")
+        case .cut:
+            return ShortcutBinding(keyCode: kVK_ANSI_X, modifiers: [.command], keyEquivalent: "x")
+        case .copy:
+            return ShortcutBinding(keyCode: kVK_ANSI_C, modifiers: [.command], keyEquivalent: "c")
+        case .paste:
+            return ShortcutBinding(keyCode: kVK_ANSI_V, modifiers: [.command], keyEquivalent: "v")
+        }
+    }
+
+    var isGlobal: Bool {
+        self == .showHideWindow
+    }
+}
+
+struct ShortcutBinding: Codable, Equatable {
+    let keyCode: UInt16
+    let modifierFlagsRawValue: UInt
+    let keyEquivalent: String
+
+    init(keyCode: Int, modifiers: NSEvent.ModifierFlags, keyEquivalent: String) {
+        self.keyCode = UInt16(keyCode)
+        self.modifierFlagsRawValue = Self.normalized(modifiers).rawValue
+        self.keyEquivalent = keyEquivalent.lowercased()
+    }
+
+    init(event: NSEvent) {
+        self.init(
+            keyCode: Int(event.keyCode),
+            modifiers: event.modifierFlags,
+            keyEquivalent: event.charactersIgnoringModifiers ?? ""
+        )
+    }
+
+    var modifierFlags: NSEvent.ModifierFlags {
+        NSEvent.ModifierFlags(rawValue: modifierFlagsRawValue)
+    }
+
+    var displayText: String {
+        var text = ""
+        let modifiers = modifierFlags
+        if modifiers.contains(.control) { text += "⌃" }
+        if modifiers.contains(.option) { text += "⌥" }
+        if modifiers.contains(.shift) { text += "⇧" }
+        if modifiers.contains(.command) { text += "⌘" }
+        return text + Self.keyDisplayName(keyCode: keyCode, fallback: keyEquivalent)
+    }
+
+    var carbonModifiers: UInt32 {
+        var result: UInt32 = 0
+        if modifierFlags.contains(.command) { result |= UInt32(cmdKey) }
+        if modifierFlags.contains(.option) { result |= UInt32(optionKey) }
+        if modifierFlags.contains(.control) { result |= UInt32(controlKey) }
+        if modifierFlags.contains(.shift) { result |= UInt32(shiftKey) }
+        return result
+    }
+
+    func matches(_ event: NSEvent) -> Bool {
+        keyCode == event.keyCode && modifierFlags == Self.normalized(event.modifierFlags)
+    }
+
+    static func normalized(_ flags: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
+        flags.intersection([.command, .option, .control, .shift])
+    }
+
+    private static func keyDisplayName(keyCode: UInt16, fallback: String) -> String {
+        switch Int(keyCode) {
+        case kVK_Return: return "↩"
+        case kVK_Tab: return "⇥"
+        case kVK_Space: return "Space"
+        case kVK_Delete: return "⌫"
+        case kVK_ForwardDelete: return "⌦"
+        case kVK_Escape: return "⎋"
+        case kVK_LeftArrow: return "←"
+        case kVK_RightArrow: return "→"
+        case kVK_UpArrow: return "↑"
+        case kVK_DownArrow: return "↓"
+        case kVK_F1: return "F1"
+        case kVK_F2: return "F2"
+        case kVK_F3: return "F3"
+        case kVK_F4: return "F4"
+        case kVK_F5: return "F5"
+        case kVK_F6: return "F6"
+        case kVK_F7: return "F7"
+        case kVK_F8: return "F8"
+        case kVK_F9: return "F9"
+        case kVK_F10: return "F10"
+        case kVK_F11: return "F11"
+        case kVK_F12: return "F12"
+        default:
+            return fallback.isEmpty ? "Key \(keyCode)" : fallback.uppercased()
+        }
+    }
+}
+
+struct ShortcutPreferences {
+    private static let key = "translate.shortcuts.bindings"
+
+    static func registerDefaults() {}
+
+    static func binding(for action: ShortcutAction) -> ShortcutBinding {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let saved = try? JSONDecoder().decode([String: ShortcutBinding].self, from: data),
+              let binding = saved[action.rawValue] else {
+            return action.defaultBinding
+        }
+        return binding
+    }
+
+    static func set(_ binding: ShortcutBinding, for action: ShortcutAction) -> Bool {
+        guard !ShortcutAction.allCases.contains(where: {
+            $0 != action && Self.binding(for: $0) == binding
+        }) else {
+            return false
+        }
+
+        var bindings = savedBindings()
+        bindings[action.rawValue] = binding
+        guard let data = try? JSONEncoder().encode(bindings) else { return false }
+        UserDefaults.standard.set(data, forKey: key)
+        return true
+    }
+
+    static func restoreDefaults() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
+    static func action(matching event: NSEvent, includingGlobal: Bool = false) -> ShortcutAction? {
+        ShortcutAction.allCases.first {
+            (includingGlobal || !$0.isGlobal) && binding(for: $0).matches(event)
+        }
+    }
+
+    private static func savedBindings() -> [String: ShortcutBinding] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let bindings = try? JSONDecoder().decode([String: ShortcutBinding].self, from: data) else {
+            return [:]
+        }
+        return bindings
+    }
 }
 
 enum AppInterfaceLanguage: String, CaseIterable {

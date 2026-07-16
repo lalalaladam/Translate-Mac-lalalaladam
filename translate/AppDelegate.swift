@@ -6,6 +6,7 @@
 //
 
 import Cocoa
+import Carbon.HIToolbox
 
 class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -31,6 +32,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var sourceLanguageRootItem: NSMenuItem?
     private var targetLanguageRootItem: NSMenuItem?
     private var languageSummaryItem: NSMenuItem?
+    private var shortcutSettingsController: ShortcutSettingsWindowController?
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         // AppKit only registers a panel as eligible for another application's
@@ -51,6 +53,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         TranslateFeaturePreferences.registerDefaults()
         TranslateLanguagePreferences.registerDefaults()
         TranslateWindowPreferences.registerDefaults()
+        ShortcutPreferences.registerDefaults()
         setupMainMenu()
         panel = FloatingPanel()
         
@@ -62,12 +65,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             button.action = #selector(statusBarItemPressed)
         }
         
-        // Register Command + backslash at the system level.  This event is
-        // delivered even when another application is in front.
-        hotKey = GlobalHotKey(
-            keyCode: Constants.keyCode,
-            modifiers: Constants.carbonModifiers
-        )
+        registerGlobalShortcut()
 
         // A cold launch should behave like a normal app: show its window once
         // the customized page is ready instead of waiting for the user to
@@ -76,7 +74,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ aNotification: Notification) {
-        // Insert code here to tear down your application
+        // No persistent resources need explicit cleanup.
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
@@ -101,6 +99,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel?.contentViewController as? ViewController
     }
 
+    private func registerGlobalShortcut() {
+        // Releasing the previous wrapper unregisters its Carbon hotkey before
+        // the user-selected global show/hide binding is installed.
+        hotKey = nil
+        let binding = ShortcutPreferences.binding(for: .showHideWindow)
+        hotKey = GlobalHotKey(
+            keyCode: UInt32(binding.keyCode),
+            modifiers: binding.carbonModifiers
+        )
+    }
+
+    private func applyShortcut(_ action: ShortcutAction, to item: NSMenuItem) {
+        let binding = ShortcutPreferences.binding(for: action)
+        item.keyEquivalent = binding.keyEquivalent
+        item.keyEquivalentModifierMask = binding.modifierFlags
+    }
+
     private func setupMainMenu() {
         featureMenuItems.removeAll()
         windowBehaviorMenuItems.removeAll()
@@ -112,13 +127,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let mainMenu = NSMenu(title: interfaceText("主菜单", "Main Menu"))
 
-        let appMenuItem = NSMenuItem(title: "translate", action: nil, keyEquivalent: "")
-        let appMenu = NSMenu(title: "translate")
+        let appMenuItem = NSMenuItem(title: "Tranlate", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu(title: "Tranlate")
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
         let aboutItem = NSMenuItem(
-            title: interfaceText("关于 translate", "About translate"),
+            title: interfaceText("关于 Tranlate", "About Tranlate"),
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""
         )
@@ -126,44 +141,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(aboutItem)
         appMenu.addItem(.separator())
 
-        let hideItem = NSMenuItem(
-            title: interfaceText("隐藏 translate", "Hide translate"),
-            action: #selector(NSApplication.hide(_:)),
-            keyEquivalent: "h"
-        )
-        hideItem.keyEquivalentModifierMask = [.command]
-        hideItem.target = NSApp
-        appMenu.addItem(hideItem)
-
-        appMenu.addItem(.separator())
-        let quitItem = NSMenuItem(
-            title: interfaceText("退出 translate", "Quit translate"),
-            action: #selector(NSApplication.terminate(_:)),
-            keyEquivalent: "q"
-        )
-        quitItem.keyEquivalentModifierMask = [.command]
-        quitItem.target = NSApp
-        appMenu.addItem(quitItem)
-
-        let translationTitle = interfaceText("翻译", "Translation")
-        let translationMenuItem = NSMenuItem(
-            title: translationTitle,
-            action: nil,
-            keyEquivalent: ""
-        )
-        let translationMenu = NSMenu(title: translationTitle)
-        translationMenuItem.submenu = translationMenu
-        mainMenu.addItem(translationMenuItem)
-
         let toggleItem = NSMenuItem(
             title: interfaceText("显示或隐藏窗口", "Show or Hide Window"),
             action: #selector(togglePanelFromMenu),
-            keyEquivalent: "\\"
+            keyEquivalent: ""
         )
-        toggleItem.keyEquivalentModifierMask = [.command]
+        applyShortcut(.showHideWindow, to: toggleItem)
         toggleItem.target = self
-        translationMenu.addItem(toggleItem)
-        translationMenu.addItem(.separator())
+        appMenu.addItem(toggleItem)
+        appMenu.addItem(.separator())
 
         let copySourceItem = NSMenuItem(
             title: interfaceText("复制全部原文", "Copy All Source Text"),
@@ -171,7 +157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: ""
         )
         copySourceItem.target = self
-        translationMenu.addItem(copySourceItem)
+        appMenu.addItem(copySourceItem)
 
         let copyTranslationItem = NSMenuItem(
             title: interfaceText("复制全部译文", "Copy All Translation"),
@@ -179,16 +165,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: ""
         )
         copyTranslationItem.target = self
-        translationMenu.addItem(copyTranslationItem)
+        appMenu.addItem(copyTranslationItem)
 
         let swapItem = NSMenuItem(
             title: interfaceText("交换语言", "Swap Languages"),
             action: #selector(swapLanguagesFromMenu),
-            keyEquivalent: "s"
+            keyEquivalent: ""
         )
-        swapItem.keyEquivalentModifierMask = [.command]
+        applyShortcut(.swapLanguages, to: swapItem)
         swapItem.target = self
-        translationMenu.addItem(swapItem)
+        appMenu.addItem(swapItem)
+
+        appMenu.addItem(.separator())
+        let shortcutSettingsItem = NSMenuItem(
+            title: interfaceText("快捷键设置…", "Shortcut Settings…"),
+            action: #selector(showShortcutSettings),
+            keyEquivalent: ""
+        )
+        shortcutSettingsItem.target = self
+        appMenu.addItem(shortcutSettingsItem)
+
+        appMenu.addItem(.separator())
+        let hideItem = NSMenuItem(
+            title: interfaceText("隐藏 Tranlate", "Hide Tranlate"),
+            action: #selector(NSApplication.hide(_:)),
+            keyEquivalent: ""
+        )
+        applyShortcut(.hideApplication, to: hideItem)
+        hideItem.target = NSApp
+        appMenu.addItem(hideItem)
+
+        appMenu.addItem(.separator())
+        let quitItem = NSMenuItem(
+            title: interfaceText("退出 Tranlate", "Quit Tranlate"),
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: ""
+        )
+        applyShortcut(.quitApplication, to: quitItem)
+        quitItem.target = NSApp
+        appMenu.addItem(quitItem)
 
         addLanguageMenu(to: mainMenu)
         addInterfaceLanguageMenu(to: mainMenu)
@@ -229,7 +244,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         displayMenu.addItem(restoreItem)
 
         addWindowMenu(to: mainMenu)
-        addShortcutMenu(to: mainMenu)
 
         NSApp.mainMenu = mainMenu
     }
@@ -250,9 +264,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let closeItem = NSMenuItem(
             title: interfaceText("关闭窗口", "Close Window"),
             action: #selector(closeWindowFromMenu(_:)),
-            keyEquivalent: "w"
+            keyEquivalent: ""
         )
-        closeItem.keyEquivalentModifierMask = [.command]
+        applyShortcut(.closeWindow, to: closeItem)
         closeItem.target = self
         windowMenu.addItem(closeItem)
         windowMenu.addItem(.separator())
@@ -283,50 +297,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         windowMenu.addItem(restoreItem)
     }
 
-    private func addShortcutMenu(to mainMenu: NSMenu) {
-        let shortcutTitle = interfaceText("快捷键", "Shortcuts")
-        let shortcutMenuItem = NSMenuItem(
-            title: shortcutTitle,
-            action: nil,
-            keyEquivalent: ""
-        )
-        let shortcutMenu = NSMenu(title: shortcutTitle)
-        shortcutMenu.autoenablesItems = false
-        shortcutMenuItem.submenu = shortcutMenu
-        mainMenu.addItem(shortcutMenuItem)
-
-        [
-            interfaceText("显示或隐藏窗口 — ⌘\\", "Show or Hide Window — ⌘\\"),
-            interfaceText("关闭窗口 — ⌘W", "Close Window — ⌘W"),
-            interfaceText("隐藏应用 — ⌘H", "Hide Application — ⌘H"),
-            interfaceText("退出应用 — ⌘Q", "Quit Application — ⌘Q")
-        ].forEach { addShortcutReference($0, to: shortcutMenu) }
-
-        shortcutMenu.addItem(.separator())
-        [
-            interfaceText("选中全部原文 — ⌘A", "Select All Source Text — ⌘A"),
-            interfaceText("朗读原文 — ⌘L", "Listen to Source Text — ⌘L"),
-            interfaceText("交换语言 — ⌘S", "Swap Languages — ⌘S"),
-            interfaceText(
-                "应用 Google 拼写修正 — ⌘↩",
-                "Apply Google Spelling Correction — ⌘↩"
-            ),
-            interfaceText(
-                "将焦点移出翻译窗口 — ⇥",
-                "Move Focus out of Translation Window — ⇥"
-            )
-        ].forEach { addShortcutReference($0, to: shortcutMenu) }
-
-        shortcutMenu.addItem(.separator())
-        [
-            interfaceText("撤销 — ⌘Z", "Undo — ⌘Z"),
-            interfaceText("重做 — ⌘R", "Redo — ⌘R"),
-            interfaceText("剪切 — ⌘X", "Cut — ⌘X"),
-            interfaceText("复制所选文字 — ⌘C", "Copy Selected Text — ⌘C"),
-            interfaceText("粘贴 — ⌘V", "Paste — ⌘V")
-        ].forEach { addShortcutReference($0, to: shortcutMenu) }
-    }
-
     private func addInterfaceLanguageMenu(to mainMenu: NSMenu) {
         let menuTitle = interfaceText("界面语言", "Interface Language")
         let menuItem = NSMenuItem(title: menuTitle, action: nil, keyEquivalent: "")
@@ -346,12 +316,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             item.state = language == AppInterfaceLanguagePreferences.current ? .on : .off
             menu.addItem(item)
         }
-    }
-
-    private func addShortcutReference(_ title: String, to menu: NSMenu) {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = true
-        menu.addItem(item)
     }
 
     private func addLanguageMenu(to mainMenu: NSMenu) {
@@ -486,6 +450,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func showShortcutSettings() {
+        if shortcutSettingsController == nil {
+            shortcutSettingsController = ShortcutSettingsWindowController(
+                didChangeShortcuts: { [weak self] in
+                    guard let self else { return }
+                    self.registerGlobalShortcut()
+                    self.setupMainMenu()
+                }
+            )
+        }
+        shortcutSettingsController?.showWindow(nil)
+        shortcutSettingsController?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @objc private func togglePanelFromMenu() {
         panel.toggle()
     }
@@ -616,5 +595,225 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             featureMenuItems[feature]?.state = .on
         }
         viewController?.reloadWithCurrentPreferences()
+    }
+}
+
+private final class ShortcutSettingsWindowController: NSWindowController {
+    private let didChangeShortcuts: () -> Void
+
+    init(didChangeShortcuts: @escaping () -> Void) {
+        self.didChangeShortcuts = didChangeShortcuts
+        let panel = ShortcutSettingsPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 610),
+            styleMask: [.titled, .closable, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        super.init(window: panel)
+        rebuildContent()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func showWindow(_ sender: Any?) {
+        rebuildContent()
+        super.showWindow(sender)
+    }
+
+    private func rebuildContent() {
+        guard let panel = window else { return }
+        panel.title = interfaceText("快捷键设置", "Shortcut Settings")
+
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 560, height: 610))
+        let root = NSStackView()
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 6
+        root.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+            root.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20)
+        ])
+
+        let heading = NSTextField(labelWithString: interfaceText("快捷键设置", "Shortcut Settings"))
+        heading.font = .systemFont(ofSize: 18, weight: .semibold)
+        root.addArrangedSubview(heading)
+
+        let hint = NSTextField(wrappingLabelWithString: interfaceText(
+            "点击右侧按键，再按下新的组合键。重复的组合键不会被保存；可随时恢复默认设置。",
+            "Click a shortcut, then press a new key combination. Duplicate shortcuts are not saved; defaults can be restored at any time."
+        ))
+        hint.textColor = .secondaryLabelColor
+        hint.maximumNumberOfLines = 2
+        hint.setContentCompressionResistancePriority(.required, for: .vertical)
+        root.addArrangedSubview(hint)
+
+        let separator = NSBox()
+        separator.boxType = .separator
+        root.addArrangedSubview(separator)
+
+        ShortcutAction.allCases.forEach { action in
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 12
+            row.translatesAutoresizingMaskIntoConstraints = false
+
+            let title = NSTextField(labelWithString: action.title)
+            title.lineBreakMode = .byTruncatingTail
+            title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+            let recorder = ShortcutRecorderButton(
+                binding: ShortcutPreferences.binding(for: action)
+            )
+            recorder.onRecord = { [weak self, weak recorder] binding in
+                guard let self, let recorder else { return }
+                guard ShortcutPreferences.set(binding, for: action) else {
+                    recorder.cancelRecording()
+                    self.showDuplicateShortcutAlert()
+                    return
+                }
+                recorder.binding = binding
+                self.didChangeShortcuts()
+            }
+
+            row.addArrangedSubview(title)
+            row.addArrangedSubview(recorder)
+            title.widthAnchor.constraint(greaterThanOrEqualToConstant: 330).isActive = true
+            recorder.widthAnchor.constraint(equalToConstant: 160).isActive = true
+            recorder.heightAnchor.constraint(equalToConstant: 24).isActive = true
+            root.addArrangedSubview(row)
+        }
+
+        let footer = NSStackView()
+        footer.orientation = .horizontal
+        footer.alignment = .centerY
+        footer.distribution = .gravityAreas
+
+        let restoreButton = NSButton(
+            title: interfaceText("恢复默认快捷键", "Restore Default Shortcuts"),
+            target: self,
+            action: #selector(restoreDefaultShortcuts)
+        )
+        footer.addArrangedSubview(restoreButton)
+
+        let closeButton = NSButton(
+            title: interfaceText("完成", "Done"),
+            target: self,
+            action: #selector(closeSettings)
+        )
+        closeButton.keyEquivalent = "\r"
+        footer.addArrangedSubview(closeButton)
+        root.addArrangedSubview(footer)
+
+        panel.contentView = content
+    }
+
+    @objc private func restoreDefaultShortcuts() {
+        ShortcutPreferences.restoreDefaults()
+        didChangeShortcuts()
+        rebuildContent()
+    }
+
+    @objc private func closeSettings() {
+        window?.close()
+    }
+
+    private func showDuplicateShortcutAlert() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = interfaceText("快捷键已被使用", "Shortcut Already in Use")
+        alert.informativeText = interfaceText(
+            "每项功能必须使用不同的快捷键。请改用其他组合键。",
+            "Each feature must use a different shortcut. Please choose another combination."
+        )
+        alert.addButton(withTitle: interfaceText("好", "OK"))
+        alert.beginSheetModal(for: window!)
+    }
+}
+
+private final class ShortcutSettingsPanel: NSPanel {
+    weak var activeRecorder: ShortcutRecorderButton?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard let recorder = activeRecorder, recorder.isRecording else {
+            return super.performKeyEquivalent(with: event)
+        }
+        recorder.record(event)
+        return true
+    }
+}
+
+private final class ShortcutRecorderButton: NSButton {
+    var binding: ShortcutBinding {
+        didSet { updateTitle() }
+    }
+    var onRecord: ((ShortcutBinding) -> Void)?
+    fileprivate private(set) var isRecording = false
+
+    init(binding: ShortcutBinding) {
+        self.binding = binding
+        super.init(frame: .zero)
+        bezelStyle = .rounded
+        alignment = .center
+        font = .monospacedSystemFont(ofSize: 13, weight: .medium)
+        target = self
+        action = #selector(beginRecording)
+        updateTitle()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    @objc private func beginRecording() {
+        isRecording = true
+        title = interfaceText("按下快捷键…", "Press Shortcut…")
+        (window as? ShortcutSettingsPanel)?.activeRecorder = self
+        window?.makeFirstResponder(self)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard isRecording else {
+            super.keyDown(with: event)
+            return
+        }
+        record(event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard isRecording else { return super.performKeyEquivalent(with: event) }
+        record(event)
+        return true
+    }
+
+    fileprivate func record(_ event: NSEvent) {
+        if event.keyCode == kVK_Escape {
+            cancelRecording()
+            return
+        }
+        let binding = ShortcutBinding(event: event)
+        isRecording = false
+        (window as? ShortcutSettingsPanel)?.activeRecorder = nil
+        onRecord?(binding)
+    }
+
+    fileprivate func cancelRecording() {
+        isRecording = false
+        (window as? ShortcutSettingsPanel)?.activeRecorder = nil
+        updateTitle()
+    }
+
+    private func updateTitle() {
+        title = binding.displayText
     }
 }

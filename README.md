@@ -43,6 +43,11 @@ preserves the current source text and temporary translation direction.
 
 ## Keybindings
 
+Choose **Shortcut Settings…** (`快捷键设置…`) from the native **Tranlate**
+application menu to open the shortcut-settings window. Every shortcut below
+can be changed there; the defaults are listed here and can be restored with
+**Restore Default Shortcuts**.
+
 | Shortcuts                                   | Functionality        |
 | ------------------------------------------- | -------------------- |
 | `Tab` | Move focus out of the translation window |
@@ -61,11 +66,10 @@ preserves the current source text and temporary translation direction.
 
 | Menu | Functionality |
 | --- | --- |
-| `翻译` | Show or hide the panel, copy all source/result text, swap languages |
+| `Tranlate` | Show or hide the panel, copy all source/result text, swap languages, and open shortcut settings |
 | `语言` | Configure, apply, or restore the persistent default language pair |
 | `显示` | Enable or disable the customized compact-interface features |
 | `窗口` | Close the window and configure current-Space or all-Spaces behavior |
-| `快捷键` | Display every keyboard shortcut currently implemented by the app |
 | `界面语言` | Switch all native menus and Google language labels between Chinese and English |
 
 ### Reporting Issues

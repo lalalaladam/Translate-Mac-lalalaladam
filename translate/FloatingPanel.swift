@@ -11,6 +11,8 @@ class FloatingPanel: NSPanel {
     public var isPresented = false
     public var isDragged = false
     private var hasPendingPresentation = false
+    private var activeSpaceObserver: NSObjectProtocol?
+    private var restoreFrontOrderWorkItem: DispatchWorkItem?
     
     required init() {
         let styleMask: StyleMask = [.resizable, .titled, .closable, .fullSizeContentView]
@@ -37,6 +39,24 @@ class FloatingPanel: NSPanel {
         standardWindowButton(.zoomButton)?.isHidden = true
         
         center()
+
+        // A normal-level window should retain its front order when the user
+        // leaves its desktop and comes back. AppKit occasionally restores the
+        // Space before it restores the panel's order, which leaves it behind
+        // another app despite having been frontmost before the switch.
+        activeSpaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: NSWorkspace.shared,
+            queue: .main
+        ) { [weak self] _ in
+            self?.restoreFrontOrderAfterActiveSpaceChange()
+        }
+    }
+
+    deinit {
+        if let activeSpaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activeSpaceObserver)
+        }
     }
     
     public func applyWindowBehaviorPreferences() {
@@ -58,6 +78,31 @@ class FloatingPanel: NSPanel {
             behavior.insert(.moveToActiveSpace)
         }
         collectionBehavior = behavior
+    }
+
+    func restoreFrontOrderAfterActiveSpaceChange() {
+        guard !TranslateWindowPreferences.keepOnTop,
+              !TranslateWindowPreferences.showOnAllSpaces,
+              isVisible else {
+            return
+        }
+
+        // Wait until Mission Control has completed the Space transition.
+        // isOnActiveSpace prevents an outgoing-space notification from moving
+        // the panel into the desktop the user has just left.
+        restoreFrontOrderWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.isVisible,
+                  self.isOnActiveSpace,
+                  !TranslateWindowPreferences.keepOnTop,
+                  !TranslateWindowPreferences.showOnAllSpaces else {
+                return
+            }
+            self.orderFrontRegardless()
+        }
+        restoreFrontOrderWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
     }
 
     public func presentWhenReady() {

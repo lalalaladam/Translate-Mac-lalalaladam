@@ -16,7 +16,7 @@ class ViewController: NSViewController, WKNavigationDelegate {
     public var isReady = false
     private var readyHandlers: [() -> Void] = []
 
-    var webView: WKWebView!
+    var webView: WebView!
     var visualEffect: NSVisualEffectView!
     private var pendingSourceTextForReload: String?
     private var pendingSourceRestoreAttempts = 0
@@ -282,6 +282,9 @@ class ViewController: NSViewController, WKNavigationDelegate {
             frame: NSRect(x: 0, y: 0, width: width, height: height),
             configuration: config
         )
+        webView.shortcutHandler = { [weak self] action in
+            self?.performShortcut(action) ?? false
+        }
         webView.navigationDelegate = self
 
         webView.load(URLRequest(url: defaultTranslationURL()))
@@ -310,6 +313,33 @@ class ViewController: NSViewController, WKNavigationDelegate {
         visualEffect.autoresizingMask = [.width, .height]
 
         self.view.addSubview(visualEffect, positioned: .below, relativeTo: nil)
+
+        // Keep window movement completely outside the web content. These
+        // narrow native strips behave like a conventional title bar while
+        // source/result text remains exclusively available for selection.
+        let edgeInset: CGFloat = 4
+        let handleHeight: CGFloat = 14
+        let bottomHandle = WindowDragHandleView(
+            frame: NSRect(
+                x: 0,
+                y: edgeInset,
+                width: self.view.bounds.width,
+                height: handleHeight
+            )
+        )
+        bottomHandle.autoresizingMask = [.width, .maxYMargin]
+        self.view.addSubview(bottomHandle)
+
+        let topHandle = WindowDragHandleView(
+            frame: NSRect(
+                x: 0,
+                y: self.view.bounds.height - edgeInset - handleHeight,
+                width: self.view.bounds.width,
+                height: handleHeight
+            )
+        )
+        topHandle.autoresizingMask = [.width, .minYMargin]
+        self.view.addSubview(topHandle)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -862,6 +892,7 @@ class ViewController: NSViewController, WKNavigationDelegate {
                         ensureSourceCopyButton();
                         keepOnlyResultCopyButton();
                     }
+
                 };
 
                 let cleanupScheduled = false;
@@ -906,6 +937,7 @@ class ViewController: NSViewController, WKNavigationDelegate {
                     document.addEventListener("click", blockResultClick, true);
                     document.addEventListener("dblclick", blockResultClick, true);
                     document.addEventListener("selectionchange", scheduleCleanup, true);
+                    document.addEventListener("input", scheduleCleanup, true);
 
                     // Do not let Google install a page-level context menu or
                     // selection callout.  Native text selection and Cmd+C
@@ -916,49 +948,6 @@ class ViewController: NSViewController, WKNavigationDelegate {
                         event.stopImmediatePropagation();
                     }, true);
 
-                    document.addEventListener("keydown", (event) => {
-                        const keyCode = event.keyCode;
-                        const metaKey = event.metaKey;
-
-                        if (metaKey && keyCode === 65) {
-                            event.preventDefault();
-                            const textarea = document.getElementsByTagName("textarea")[0];
-                            if (textarea) {
-                                textarea.focus();
-                                textarea.select();
-                            }
-                        }
-
-                        if (keyCode === 9) {
-                            event.preventDefault();
-                            window.webkit.messageHandlers.callbackHandler.postMessage(keyCode);
-                        }
-
-                        if (metaKey && keyCode === 76) {
-                            const listenButton = document.querySelector(
-                                ".m0Qfkd .VfPpkd-Bz112c-kBDsod:not(.VfPpkd-Bz112c-kBDsod-OWXEXe-IT5dJd)"
-                            );
-                            if (listenButton) listenButton.click();
-                            setTimeout(() => {
-                                const textarea = document.getElementsByTagName("textarea")[0];
-                                if (textarea) {
-                                    textarea.focus();
-                                    textarea.select();
-                                }
-                            }, 800);
-                        }
-
-                        if (metaKey && keyCode === 83) {
-                            const swap = Array.from(document.querySelectorAll("i"))
-                                .find((element) => element.innerText === "swap_horiz");
-                            if (swap) swap.click();
-                        }
-
-                        if (metaKey && keyCode === 13) {
-                            const label = document.querySelector(".mvqA2c");
-                            if (label) label.click();
-                        }
-                    });
                 }
 
                 cleanup();
@@ -1125,6 +1114,62 @@ class ViewController: NSViewController, WKNavigationDelegate {
                 if (control) control.click();
                 return Boolean(control);
             })();
+        """#, completionHandler: nil)
+    }
+
+    func performShortcut(_ action: ShortcutAction) -> Bool {
+        switch action {
+        case .showHideWindow:
+            // This action is registered as a Carbon global hotkey. Handling
+            // it here too would toggle twice while the app is active.
+            return false
+        case .closeWindow:
+            view.window?.performClose(nil)
+        case .hideApplication:
+            NSApp.hide(nil)
+        case .quitApplication:
+            NSApp.terminate(nil)
+        case .selectAllSource:
+            focusAndSelectField()
+        case .listenSource:
+            listenToSource()
+        case .swapLanguages:
+            swapLanguages()
+        case .applySpellingCorrection:
+            applySpellingCorrection()
+        case .moveFocusOut:
+            (NSApplication.shared.delegate as? AppDelegate)?.panel.resignKey()
+        case .undo:
+            return NSApp.sendAction(Selector(("undo:")), to: nil, from: webView)
+        case .redo:
+            return NSApp.sendAction(Selector(("redo:")), to: nil, from: webView)
+        case .cut:
+            return NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: webView)
+        case .copy:
+            return NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: webView)
+        case .paste:
+            return NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: webView)
+        }
+        return true
+    }
+
+    private func listenToSource() {
+        webView.evaluateJavaScript(#"""
+            (() => {
+                const button = document.querySelector(
+                    ".m0Qfkd .VfPpkd-Bz112c-kBDsod:not(.VfPpkd-Bz112c-kBDsod-OWXEXe-IT5dJd)"
+                );
+                if (button) button.click();
+            })();
+        """#, completionHandler: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self?.focusAndSelectField()
+        }
+    }
+
+    private func applySpellingCorrection() {
+        webView.evaluateJavaScript(#"""
+            document.querySelector(".mvqA2c")?.click();
         """#, completionHandler: nil)
     }
 

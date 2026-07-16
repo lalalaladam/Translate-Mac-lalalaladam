@@ -8,60 +8,38 @@
 import Cocoa
 import WebKit
 
+final class WindowDragHandleView: NSView {
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .openHand)
+    }
+}
+
 class WebView: WKWebView {
-    private let commandKey = NSEvent.ModifierFlags.command.rawValue
-    private var shouldDragWindow = false
-        
+    // The view controller performs page-specific actions such as selecting
+    // source text or pressing Google's listen button. Keeping the mapping in
+    // native code makes the user-configurable shortcuts work independently of
+    // Google Translate's own keyboard-event implementation.
+    var shortcutHandler: ((ShortcutAction) -> Bool)?
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.type == NSEvent.EventType.keyDown {
-            if (event.modifierFlags.rawValue & NSEvent.ModifierFlags.deviceIndependentFlagsMask.rawValue) == commandKey {
-                switch event.charactersIgnoringModifiers! {
-                case "z":
-                    if NSApp.sendAction(Selector(("undo:")), to: nil, from: self) { return true }
-                case "r":
-                    if NSApp.sendAction(Selector(("redo:")), to: nil, from: self) { return true }
-                case "x":
-                    if NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: self) { return true }
-                case "c":
-                    if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self) { return true }
-                case "v":
-                    if NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) { return true }
-                default:
-                break
-                }
-            }
+        if event.type == .keyDown,
+           let action = ShortcutPreferences.action(matching: event),
+           shortcutHandler?(action) == true {
+            return true
         }
-        
         return super.performKeyEquivalent(with: event)
     }
-    
-    override func mouseDown(with event: NSEvent) {
-        // Both the source textarea (upper-left) and the result pane (right)
-        // must keep native WebKit text selection.  Other parts of the page
-        // remain window-drag surfaces.
-        let point = convert(event.locationInWindow, from: nil)
-        let isResultTextArea = point.x >= bounds.midX
-        let isSourceTextArea = point.x < bounds.midX && point.y < bounds.height * 0.62
-        shouldDragWindow = !(isResultTextArea || isSourceTextArea)
-        super.mouseDown(with: event)
-    }
 
-    override func mouseDragged(with event: NSEvent) {
-        if shouldDragWindow {
-            self.window?.performDrag(with: event)
-        } else {
-            super.mouseDragged(with: event)
+    override func keyDown(with event: NSEvent) {
+        if let action = ShortcutPreferences.action(matching: event),
+           shortcutHandler?(action) == true {
+            return
         }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        if shouldDragWindow {
-            super.mouseUp(with: event)
-            self.window?.mouseUp(with: event)
-        } else {
-            super.mouseUp(with: event)
-        }
-        shouldDragWindow = false
+        super.keyDown(with: event)
     }
 
     // Do not show the native contextual menu/callout when text is selected.
