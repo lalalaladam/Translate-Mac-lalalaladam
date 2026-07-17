@@ -35,20 +35,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var shortcutSettingsController: ShortcutSettingsWindowController?
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
-        // AppKit only registers a panel as eligible for another application's
-        // full-screen Space while the owning app uses the accessory policy.
-        // Create the panel in that policy, then immediately restore normal
-        // Dock and menu-bar behavior before anything is presented.
-        let restoreRegularPolicy = NSApp.activationPolicy() == .regular
-        if restoreRegularPolicy {
-            NSApp.setActivationPolicy(.accessory)
-        }
-        defer {
-            if restoreRegularPolicy {
-                NSApp.setActivationPolicy(.regular)
-            }
-        }
-
         AppInterfaceLanguagePreferences.registerDefaults()
         TranslateFeaturePreferences.registerDefaults()
         TranslateLanguagePreferences.registerDefaults()
@@ -68,10 +54,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         registerGlobalShortcut()
 
-        // A cold launch should behave like a normal app: show its window once
-        // the customized page is ready instead of waiting for the user to
-        // discover the global shortcut.
-        panel.presentWhenReady()
+        // A cold launch must not depend on Google Translate loading. Network
+        // and VPN services are often still starting just after login; waiting
+        // for WebKit navigation here could leave the app running without any
+        // visible main window. Present the native window on the next AppKit
+        // turn, then let the web content finish loading inside it.
+        DispatchQueue.main.async { [weak self] in
+            self?.panel.presentWhenReady()
+        }
     }
 
     func applicationWillTerminate(_ aNotification: Notification) {

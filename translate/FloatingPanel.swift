@@ -13,9 +13,10 @@ class FloatingPanel: NSPanel {
     private var hasPendingPresentation = false
     
     required init() {
-        // nonactivatingPanel must be decided when the underlying NSPanel is
-        // created. The app delegate recreates this lightweight panel when the
-        // all-Spaces preference changes, while preserving its web controller.
+        // Keep the main panel as a normal, activatable macOS window. Space
+        // membership is controlled with collectionBehavior below; changing
+        // the app activation policy during launch can cause macOS to move a
+        // newly created panel to another desktop or a full-screen Space.
         var styleMask: StyleMask = [
             .resizable,
             .titled,
@@ -91,16 +92,20 @@ class FloatingPanel: NSPanel {
     public func presentWhenReady() {
         let controller = contentViewController as! ViewController
 
-        if controller.isReady {
-            presentNow()
-            return
-        }
+        // Showing a native window must never wait for a remote website. At
+        // cold login the network (or a VPN) can take a while to become ready;
+        // WebKit will continue loading after the window is already visible.
+        presentNow()
 
-        guard !hasPendingPresentation else { return }
+        guard !controller.isReady, !hasPendingPresentation else { return }
         hasPendingPresentation = true
         controller.whenReady { [weak self] in
-            guard let self, self.hasPendingPresentation else { return }
-            self.presentNow()
+            guard let self else { return }
+            self.hasPendingPresentation = false
+            // Only move focus once the page has a text area, and never revive
+            // a window that the user intentionally hid while it was loading.
+            guard self.isVisible, self.isPresented else { return }
+            controller.focusAndSelectField()
         }
     }
 
@@ -121,12 +126,12 @@ class FloatingPanel: NSPanel {
             NSApp.activate(ignoringOtherApps: true)
             makeKeyAndOrderFront(nil)
         }
-        controller.focusAndSelectField()
+        if controller.isReady {
+            controller.focusAndSelectField()
+        }
     }
 
     public func toggle() {
-        let controller = contentViewController as! ViewController
-        
         // If the window is both visible and frontmost, the shortcut hides it.
         // If another application is frontmost, the same shortcut brings this
         // window forward instead of doing nothing.
@@ -137,11 +142,7 @@ class FloatingPanel: NSPanel {
             return
         }
 
-        if controller.isReady {
-            presentNow()
-        } else {
-            presentWhenReady()
-        }
+        presentWhenReady()
     }
     
     override func close() {

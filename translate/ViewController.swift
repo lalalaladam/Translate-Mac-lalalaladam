@@ -38,6 +38,14 @@ class ViewController: NSViewController, WKNavigationDelegate {
     private var pendingSourceRestoreAttempts = 0
     private var reloadRequestGeneration = 0
     private var applicationAppearanceObservation: NSKeyValueObservation?
+    private var connectionOverlay: NSVisualEffectView?
+    private var connectionTitleLabel: NSTextField?
+    private var connectionDetailLabel: NSTextField?
+    private var connectionSpinner: NSProgressIndicator?
+    private var connectionRetryButton: NSButton?
+    private var loadTimeoutWorkItem: DispatchWorkItem?
+    private var automaticRetryWorkItem: DispatchWorkItem?
+    private var translationLoadAttempt = 0
 
     var isDarkMode: Bool {
         let appearance = NSApp.effectiveAppearance
@@ -311,8 +319,6 @@ class ViewController: NSViewController, WKNavigationDelegate {
         }
         webView.navigationDelegate = self
 
-        webView.load(URLRequest(url: defaultTranslationURL()))
-
         webView.wantsLayer = true
         webView.layer?.backgroundColor = .clear
         webView.underPageBackgroundColor = .clear
@@ -355,6 +361,7 @@ class ViewController: NSViewController, WKNavigationDelegate {
         self.view.addSubview(visualEffect, positioned: .below, relativeTo: nil)
 
         installWindowBehaviorBar()
+        installConnectionOverlay()
 
         (view as? AppearanceObservingView)?.effectiveAppearanceDidChange = {
             [weak self] in
@@ -396,6 +403,16 @@ class ViewController: NSViewController, WKNavigationDelegate {
         )
         bottomHandle.autoresizingMask = [.width, .maxYMargin]
         self.view.addSubview(bottomHandle)
+
+        // Do not leave a blank panel while a network service or VPN is still
+        // starting. The overlay is replaced by Google Translate as soon as
+        // the first successful navigation finishes.
+        loadTranslationService()
+    }
+
+    deinit {
+        loadTimeoutWorkItem?.cancel()
+        automaticRetryWorkItem?.cancel()
     }
 
     private func installWindowBehaviorBar() {
@@ -499,6 +516,155 @@ class ViewController: NSViewController, WKNavigationDelegate {
         showOnAllSpacesButton?.state = TranslateWindowPreferences.showOnAllSpaces ? .on : .off
     }
 
+    private func installConnectionOverlay() {
+        let overlay = NSVisualEffectView()
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        overlay.material = .popover
+        overlay.blendingMode = .withinWindow
+        overlay.state = .active
+        overlay.wantsLayer = true
+        overlay.layer?.cornerRadius = 12
+
+        let spinner = NSProgressIndicator()
+        spinner.style = .spinning
+        spinner.controlSize = .regular
+        spinner.startAnimation(nil)
+
+        let title = NSTextField(labelWithString: "")
+        title.font = .systemFont(ofSize: 17, weight: .semibold)
+        title.alignment = .center
+        title.maximumNumberOfLines = 2
+
+        let detail = NSTextField(wrappingLabelWithString: "")
+        detail.font = .systemFont(ofSize: 13)
+        detail.textColor = .secondaryLabelColor
+        detail.alignment = .center
+        detail.maximumNumberOfLines = 3
+        detail.preferredMaxLayoutWidth = 390
+
+        let retryButton = NSButton(
+            title: interfaceText("立即重试", "Retry Now"),
+            target: self,
+            action: #selector(retryTranslationService)
+        )
+        retryButton.bezelStyle = .rounded
+
+        let stack = NSStackView(views: [spinner, title, detail, retryButton])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        overlay.addSubview(stack)
+        view.addSubview(overlay, positioned: .above, relativeTo: webView)
+        NSLayoutConstraint.activate([
+            overlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            overlay.topAnchor.constraint(equalTo: view.topAnchor),
+            overlay.bottomAnchor.constraint(
+                equalTo: view.bottomAnchor,
+                constant: -Self.windowBehaviorBarHeight
+            ),
+            stack.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: overlay.leadingAnchor, constant: 24),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: overlay.trailingAnchor, constant: -24)
+        ])
+
+        connectionOverlay = overlay
+        connectionTitleLabel = title
+        connectionDetailLabel = detail
+        connectionSpinner = spinner
+        connectionRetryButton = retryButton
+        showConnectionOverlay(waitingForNetwork: true)
+    }
+
+    private func showConnectionOverlay(waitingForNetwork: Bool) {
+        connectionOverlay?.isHidden = false
+        connectionRetryButton?.title = interfaceText("立即重试", "Retry Now")
+
+        if waitingForNetwork {
+            connectionTitleLabel?.stringValue = interfaceText(
+                "正在连接翻译服务…",
+                "Connecting to the translation service…"
+            )
+            connectionDetailLabel?.stringValue = interfaceText(
+                "如果网络或 VPN 正在启动，连接恢复后会自动继续。",
+                "If your network or VPN is starting, the app will continue automatically when it is available."
+            )
+            connectionSpinner?.isHidden = false
+            connectionSpinner?.startAnimation(nil)
+        } else {
+            connectionTitleLabel?.stringValue = interfaceText(
+                "暂时无法连接 Google Translate",
+                "Google Translate is currently unavailable"
+            )
+            connectionDetailLabel?.stringValue = interfaceText(
+                "请检查网络或开启可访问 Google Translate 的 VPN。软件会自动重试，也可以立即重试。",
+                "Check your network or connect a VPN that can reach Google Translate. The app will retry automatically, or you can retry now."
+            )
+            connectionSpinner?.isHidden = true
+            connectionSpinner?.stopAnimation(nil)
+        }
+    }
+
+    private func hideConnectionOverlay() {
+        connectionOverlay?.isHidden = true
+        connectionSpinner?.stopAnimation(nil)
+    }
+
+    private func loadTranslationService() {
+        automaticRetryWorkItem?.cancel()
+        loadTimeoutWorkItem?.cancel()
+        translationLoadAttempt += 1
+        let attempt = translationLoadAttempt
+
+        isReady = false
+        showConnectionOverlay(waitingForNetwork: true)
+        webView.load(
+            URLRequest(
+                url: defaultTranslationURL(),
+                cachePolicy: .reloadIgnoringLocalCacheData,
+                timeoutInterval: 15
+            )
+        )
+
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.translationLoadAttempt == attempt,
+                  !self.isReady else {
+                return
+            }
+            self.handleTranslationLoadFailure()
+        }
+        loadTimeoutWorkItem = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 16, execute: timeout)
+    }
+
+    @objc private func retryTranslationService() {
+        loadTranslationService()
+    }
+
+    private func handleTranslationLoadFailure() {
+        guard !isReady else { return }
+        loadTimeoutWorkItem?.cancel()
+        showConnectionOverlay(waitingForNetwork: false)
+        scheduleAutomaticRetry()
+    }
+
+    private func scheduleAutomaticRetry() {
+        automaticRetryWorkItem?.cancel()
+        let retry = DispatchWorkItem { [weak self] in
+            guard let self, !self.isReady else { return }
+            self.loadTranslationService()
+        }
+        automaticRetryWorkItem = retry
+        // VPN connection changes are not exposed as a reliable AppKit event.
+        // A gentle retry loop lets a newly connected VPN recover without an
+        // app restart and avoids polling while the page is already ready.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: retry)
+    }
+
     override func keyDown(with event: NSEvent) {
         // Keyboard shortcuts inside the page are handled by the injected JS.
     }
@@ -521,6 +687,22 @@ class ViewController: NSViewController, WKNavigationDelegate {
             url.host == "translate.google.com" &&
             (url.path.isEmpty || url.path == "/")
         decisionHandler(isTranslateHome ? .allow : .cancel)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        handleTranslationLoadFailure()
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFail navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        handleTranslationLoadFailure()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -1128,6 +1310,9 @@ class ViewController: NSViewController, WKNavigationDelegate {
                 guard let self else { return }
                 self.restorePendingSourceTextIfNeeded()
                 self.markReady()
+                self.loadTimeoutWorkItem?.cancel()
+                self.automaticRetryWorkItem?.cancel()
+                self.hideConnectionOverlay()
             }
         }
     }
