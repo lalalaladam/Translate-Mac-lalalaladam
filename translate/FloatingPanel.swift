@@ -11,12 +11,6 @@ class FloatingPanel: NSPanel {
     public var isPresented = false
     public var isDragged = false
     private var hasPendingPresentation = false
-    private var activeSpaceObserver: NSObjectProtocol?
-    private var restoreFrontOrderWorkItem: DispatchWorkItem?
-    private var keyWindowObserver: NSObjectProtocol?
-    private var resignKeyObserver: NSObjectProtocol?
-    private var shouldRestoreFrontOrder = false
-    private var resignKeyWorkItem: DispatchWorkItem?
     
     required init() {
         // nonactivatingPanel must be decided when the underlying NSPanel is
@@ -33,6 +27,16 @@ class FloatingPanel: NSPanel {
         }
         
         super.init(contentRect: .zero, styleMask: styleMask, backing: .buffered, defer: false)
+
+        // The customized two-pane interface needs enough room for language
+        // controls, selectable text, and the native bottom bar. Do not allow
+        // AppKit to compress it into a narrow strip.
+        let minimumContentSize = NSSize(
+            width: CGFloat(Constants.WIDTH),
+            height: CGFloat(Constants.HEIGHT)
+        )
+        minSize = minimumContentSize
+        contentMinSize = minimumContentSize
         
         // Keep an activatable normal panel; the optional always-on-top
         // behavior is controlled only through the native Window menu.
@@ -42,6 +46,7 @@ class FloatingPanel: NSPanel {
         contentViewController = ViewController()
         applyWindowBehaviorPreferences()
         
+        isOpaque = false
         backgroundColor = .clear
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
@@ -55,60 +60,8 @@ class FloatingPanel: NSPanel {
         
         center()
 
-        // A normal-level window should retain its front order when the user
-        // leaves its desktop and comes back. AppKit occasionally restores the
-        // Space before it restores the panel's order, which leaves it behind
-        // another app despite having been frontmost before the switch.
-        activeSpaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.activeSpaceDidChangeNotification,
-            object: NSWorkspace.shared,
-            queue: .main
-        ) { [weak self] _ in
-            self?.resignKeyWorkItem?.cancel()
-            self?.restoreFrontOrderAfterActiveSpaceChange()
-        }
-
-        keyWindowObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didBecomeKeyNotification,
-            object: self,
-            queue: .main
-        ) { [weak self] _ in
-            self?.resignKeyWorkItem?.cancel()
-            self?.shouldRestoreFrontOrder = true
-        }
-
-        resignKeyObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didResignKeyNotification,
-            object: self,
-            queue: .main
-        ) { [weak self] _ in
-            // AppKit sends didResignKey both when another window is placed
-            // above this one and at the beginning of a Space animation. Delay
-            // the decision: activeSpaceDidChange cancels this work item when
-            // the resignation was caused by a desktop transition.
-            self?.resignKeyWorkItem?.cancel()
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self, self.isOnActiveSpace else { return }
-                self.shouldRestoreFrontOrder = false
-            }
-            self?.resignKeyWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75, execute: workItem)
-        }
     }
 
-    deinit {
-        resignKeyWorkItem?.cancel()
-        if let activeSpaceObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(activeSpaceObserver)
-        }
-        if let keyWindowObserver {
-            NotificationCenter.default.removeObserver(keyWindowObserver)
-        }
-        if let resignKeyObserver {
-            NotificationCenter.default.removeObserver(resignKeyObserver)
-        }
-    }
-    
     public func applyWindowBehaviorPreferences() {
         level = TranslateWindowPreferences.keepOnTop ? .floating : .normal
 
@@ -131,36 +84,8 @@ class FloatingPanel: NSPanel {
             }
         } else {
             behavior.insert(.managed)
-            behavior.insert(.moveToActiveSpace)
         }
         collectionBehavior = behavior
-    }
-
-    func restoreFrontOrderAfterActiveSpaceChange() {
-        guard !TranslateWindowPreferences.keepOnTop,
-              !TranslateWindowPreferences.showOnAllSpaces,
-              isVisible,
-              shouldRestoreFrontOrder else {
-            return
-        }
-
-        // Wait until Mission Control has completed the Space transition.
-        // isOnActiveSpace prevents an outgoing-space notification from moving
-        // the panel into the desktop the user has just left.
-        restoreFrontOrderWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self,
-                  self.isVisible,
-                  self.isOnActiveSpace,
-                  self.shouldRestoreFrontOrder,
-                  !TranslateWindowPreferences.keepOnTop,
-                  !TranslateWindowPreferences.showOnAllSpaces else {
-                return
-            }
-            self.orderFrontRegardless()
-        }
-        restoreFrontOrderWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
     }
 
     public func presentWhenReady() {

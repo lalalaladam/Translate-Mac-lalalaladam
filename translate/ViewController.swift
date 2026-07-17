@@ -6,7 +6,18 @@
 import Cocoa
 import WebKit
 
+private final class AppearanceObservingView: NSView {
+    var effectiveAppearanceDidChange: (() -> Void)?
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        effectiveAppearanceDidChange?()
+    }
+}
+
 class ViewController: NSViewController, WKNavigationDelegate {
+    private static let windowBehaviorBarHeight: CGFloat = 34
+
     private enum ReloadDestination {
         case currentPage
         case defaultLanguages
@@ -20,13 +31,17 @@ class ViewController: NSViewController, WKNavigationDelegate {
     var visualEffect: NSVisualEffectView!
     private var keepOnTopButton: NSButton!
     private var showOnAllSpacesButton: NSButton!
+    private var windowBehaviorBar: WindowBehaviorBarView?
+    private var windowBehaviorSettingsGroup: NSView?
+    private var windowBehaviorDivider: NSView?
     private var pendingSourceTextForReload: String?
     private var pendingSourceRestoreAttempts = 0
     private var reloadRequestGeneration = 0
+    private var applicationAppearanceObservation: NSKeyValueObservation?
 
     var isDarkMode: Bool {
-        let mode = UserDefaults.standard.string(forKey: "AppleInterfaceStyle")
-        return mode == "Dark"
+        let appearance = NSApp.effectiveAppearance
+        return appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
 
     public func whenReady(_ handler: @escaping () -> Void) {
@@ -273,17 +288,24 @@ class ViewController: NSViewController, WKNavigationDelegate {
     }
 
     override func loadView() {
-        let width = Constants.WIDTH
-        let height = Constants.HEIGHT
+        let width = CGFloat(Constants.WIDTH)
+        let height = CGFloat(Constants.HEIGHT)
+        let barHeight = Self.windowBehaviorBarHeight
 
         let config = WKWebViewConfiguration()
         config.userContentController.add(self, name: "callbackHandler")
         installUserScripts(on: config.userContentController)
 
         webView = WebView(
-            frame: NSRect(x: 0, y: 0, width: width, height: height),
+            frame: NSRect(
+                x: 0,
+                y: barHeight,
+                width: width,
+                height: height - barHeight
+            ),
             configuration: config
         )
+        webView.autoresizingMask = [.width, .height]
         webView.shortcutHandler = { [weak self] action in
             self?.performShortcut(action) ?? false
         }
@@ -293,9 +315,17 @@ class ViewController: NSViewController, WKNavigationDelegate {
 
         webView.wantsLayer = true
         webView.layer?.backgroundColor = .clear
+        webView.underPageBackgroundColor = .clear
         webView.setValue(false, forKey: "drawsBackground")
 
-        self.view = webView
+        // Give the native settings bar its own layout space. Previously it
+        // was overlaid on WKWebView, so long translations could place the
+        // Google copy button underneath the bar.
+        let rootView = AppearanceObservingView(
+            frame: NSRect(x: 0, y: 0, width: width, height: height)
+        )
+        rootView.addSubview(webView)
+        self.view = rootView
     }
 
     override func viewDidLoad() {
@@ -306,7 +336,15 @@ class ViewController: NSViewController, WKNavigationDelegate {
             object: nil,
             queue: OperationQueue.main
         ) { [weak self] _ in
-            self?.setTheme()
+            // The distributed notification can precede AppKit's appearance
+            // propagation. Retry briefly so the final pass always observes
+            // the new application-level appearance.
+            [0.0, 0.1, 0.35].forEach { delay in
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    [weak self] in
+                    self?.setTheme()
+                }
+            }
         }
 
         visualEffect = NSVisualEffectView(frame: self.view.bounds)
@@ -318,6 +356,20 @@ class ViewController: NSViewController, WKNavigationDelegate {
 
         installWindowBehaviorBar()
 
+        (view as? AppearanceObservingView)?.effectiveAppearanceDidChange = {
+            [weak self] in
+            self?.setTheme()
+        }
+
+        applicationAppearanceObservation = NSApp.observe(
+            \.effectiveAppearance,
+            options: [.new]
+        ) { [weak self] _, _ in
+            DispatchQueue.main.async { [weak self] in
+                self?.setTheme()
+            }
+        }
+
         // Keep window movement completely outside the web content. These
         // narrow native strips behave like a conventional title bar while
         // source/result text remains exclusively available for selection.
@@ -326,42 +378,39 @@ class ViewController: NSViewController, WKNavigationDelegate {
         let topHandle = WindowDragHandleView(
             frame: NSRect(
                 x: 0,
-                y: 0,
+                y: self.view.bounds.height - edgeInset - handleHeight,
                 width: self.view.bounds.width,
                 height: handleHeight
             )
         )
-        topHandle.autoresizingMask = [.width, .maxYMargin]
+        topHandle.autoresizingMask = [.width, .minYMargin]
         self.view.addSubview(topHandle)
 
         let bottomHandle = WindowDragHandleView(
             frame: NSRect(
                 x: 0,
-                y: self.view.bounds.height - 34 - edgeInset - handleHeight,
+                y: Self.windowBehaviorBarHeight + edgeInset,
                 width: self.view.bounds.width,
                 height: handleHeight
             )
         )
-        bottomHandle.autoresizingMask = [.width, .minYMargin]
+        bottomHandle.autoresizingMask = [.width, .maxYMargin]
         self.view.addSubview(bottomHandle)
     }
 
     private func installWindowBehaviorBar() {
-        let barHeight: CGFloat = 34
+        let barHeight = Self.windowBehaviorBarHeight
         let bar = WindowBehaviorBarView(
             frame: NSRect(
                 x: 0,
-                // WKWebView uses flipped coordinates, so the visual bottom
-                // is bounds.height - barHeight rather than y = 0.
-                y: view.bounds.height - barHeight,
+                y: 0,
                 width: view.bounds.width,
                 height: barHeight
             )
         )
-        bar.material = .sidebar
-        bar.blendingMode = .withinWindow
+        bar.blendingMode = .behindWindow
         bar.state = .active
-        bar.autoresizingMask = [.width, .minYMargin]
+        bar.autoresizingMask = [.width, .maxYMargin]
         bar.wantsLayer = true
         bar.layer?.borderWidth = 0.5
         bar.layer?.borderColor = NSColor.separatorColor.cgColor
@@ -375,10 +424,19 @@ class ViewController: NSViewController, WKNavigationDelegate {
             behavior: .showOnAllSpaces
         )
 
-        let stack = NSStackView(views: [keepOnTopButton, showOnAllSpacesButton])
+        let divider = NSView()
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            divider.widthAnchor.constraint(equalToConstant: 1),
+            divider.heightAnchor.constraint(equalToConstant: 16)
+        ])
+
+        let stack = NSStackView(
+            views: [keepOnTopButton, divider, showOnAllSpacesButton]
+        )
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        stack.spacing = 22
+        stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         // Visually separate the interactive settings from the draggable blank
@@ -387,10 +445,7 @@ class ViewController: NSViewController, WKNavigationDelegate {
         settingsGroup.translatesAutoresizingMaskIntoConstraints = false
         settingsGroup.wantsLayer = true
         settingsGroup.layer?.cornerRadius = 9
-        settingsGroup.layer?.backgroundColor = NSColor.controlBackgroundColor
-            .withAlphaComponent(0.78).cgColor
         settingsGroup.layer?.borderWidth = 0.75
-        settingsGroup.layer?.borderColor = NSColor.separatorColor.cgColor
         settingsGroup.addSubview(stack)
         bar.addSubview(settingsGroup)
         NSLayoutConstraint.activate([
@@ -403,6 +458,10 @@ class ViewController: NSViewController, WKNavigationDelegate {
         ])
 
         view.addSubview(bar)
+        windowBehaviorBar = bar
+        windowBehaviorSettingsGroup = settingsGroup
+        windowBehaviorDivider = divider
+        updateWindowBehaviorBarAppearance()
         syncWindowBehaviorControls()
     }
 
@@ -624,6 +683,12 @@ class ViewController: NSViewController, WKNavigationDelegate {
                         button[aria-label="听取原文"],
                         button[aria-label="Voice input"],
                         button[aria-label="Listen to source text"],
+                        .xMmqsf button[aria-label*="voice" i],
+                        .xMmqsf button[aria-label*="microphone" i],
+                        .xMmqsf button[aria-label*="speak" i],
+                        .xMmqsf button[aria-label*="listen" i],
+                        .xMmqsf button[data-tooltip*="voice" i],
+                        .xMmqsf button[data-tooltip*="microphone" i],
                         .QcsUad button[aria-label="保存翻译"],
                         .QcsUad button[aria-label="听取译文"],
                         .QcsUad a[aria-label="使用 Google 搜索"],
@@ -918,8 +983,15 @@ class ViewController: NSViewController, WKNavigationDelegate {
                         ].join(" ");
 
                         const ariaLabel = (element.getAttribute("aria-label") || "").trim();
-                        if (preferences.simplifyActionButtons && element.tagName === "BUTTON" &&
-                            /^(语音翻译|听取原文|Voice input|Listen to source text)$/i.test(ariaLabel)) {
+                        const sourceControlLabel = [
+                            ariaLabel,
+                            element.getAttribute("data-tooltip") || "",
+                            element.getAttribute("title") || ""
+                        ].join(" ").trim();
+                        if (preferences.simplifyActionButtons &&
+                            element.tagName === "BUTTON" &&
+                            element.closest(".xMmqsf") &&
+                            /(语音翻译|听取原文|voice|microphone|speak|listen)/i.test(sourceControlLabel)) {
                             hide(element);
                             return;
                         }
@@ -1062,36 +1134,52 @@ class ViewController: NSViewController, WKNavigationDelegate {
 
     func setTheme(completion: (() -> Void)? = nil) {
         visualEffect.material = isDarkMode ? .dark : .light
-        let color = isDarkMode ? "white" : "black"
-        let selectedLanguageColor = isDarkMode ? "#A8C7FA" : "#0B57D0"
-        let selectedLanguageBackground = isDarkMode
-            ? "rgba(168, 199, 250, 0.20)"
-            : "rgba(11, 87, 208, 0.14)"
+        updateWindowBehaviorBarAppearance()
         let selectedLanguageStyle = TranslateFeaturePreferences.highlightSelectedLanguage
             ? #"""
                 [role="tab"][data-language-code][aria-selected="true"] {
-                    background: \#(selectedLanguageBackground) !important;
-                    color: \#(selectedLanguageColor) !important;
+                    background: var(--translate-selected-background) !important;
+                    color: var(--translate-selected-color) !important;
                     border-radius: 10px !important;
-                    box-shadow: inset 0 -3px 0 \#(selectedLanguageColor) !important;
+                    box-shadow: inset 0 -3px 0 var(--translate-selected-color) !important;
                     font-weight: 900 !important;
                 }
 
                 [role="tab"][data-language-code][aria-selected="true"] * {
-                    color: \#(selectedLanguageColor) !important;
+                    color: var(--translate-selected-color) !important;
                     font-weight: 900 !important;
                 }
             """#
             : ""
 
         self.webView.evaluateJavaScript(#"""
-            const theme = document.getElementById("mac-translate-theme-style");
-            if (theme) theme.textContent = `
+            let theme = document.getElementById("mac-translate-theme-style");
+            if (!theme) {
+                theme = document.createElement("style");
+                theme.id = "mac-translate-theme-style";
+                (document.head || document.documentElement).appendChild(theme);
+            }
+            theme.textContent = `
+                :root {
+                    color-scheme: light dark !important;
+                    --translate-text-color: black;
+                    --translate-selected-color: #0B57D0;
+                    --translate-selected-background: rgba(11, 87, 208, 0.14);
+                }
+
+                @media (prefers-color-scheme: dark) {
+                    :root {
+                        --translate-text-color: white;
+                        --translate-selected-color: #A8C7FA;
+                        --translate-selected-background: rgba(168, 199, 250, 0.20);
+                    }
+                }
+
                 *, *:before, *:after {
                     background: transparent !important;
-                    color: \#(color) !important;
+                    color: var(--translate-text-color) !important;
                     box-shadow: none !important;
-                    border-color: \#(color) !important;
+                    border-color: var(--translate-text-color) !important;
                     border: none !important;
                     border-top: none !important;
                 }
@@ -1105,6 +1193,18 @@ class ViewController: NSViewController, WKNavigationDelegate {
         """#) { _, _ in
             completion?()
         }
+    }
+
+    private func updateWindowBehaviorBarAppearance() {
+        let dark = isDarkMode
+        windowBehaviorBar?.material = dark ? .dark : .light
+        windowBehaviorBar?.layer?.borderColor = NSColor.separatorColor.cgColor
+
+        windowBehaviorSettingsGroup?.layer?.backgroundColor = NSColor.labelColor
+            .withAlphaComponent(dark ? 0.12 : 0.055).cgColor
+        windowBehaviorSettingsGroup?.layer?.borderColor = NSColor.separatorColor.cgColor
+        windowBehaviorDivider?.wantsLayer = true
+        windowBehaviorDivider?.layer?.backgroundColor = NSColor.separatorColor.cgColor
     }
 
     public func focusAndSelectField() {
