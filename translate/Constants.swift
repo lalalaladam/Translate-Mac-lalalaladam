@@ -21,9 +21,9 @@ enum ShortcutAction: String, CaseIterable {
     case quitApplication
     case selectAllSource
     case listenSource
+    case listenTranslation
+    case stopSpeaking
     case swapLanguages
-    case applySpellingCorrection
-    case moveFocusOut
     case undo
     case redo
     case cut
@@ -44,12 +44,12 @@ enum ShortcutAction: String, CaseIterable {
             return interfaceText("选中全部原文", "Select All Source Text")
         case .listenSource:
             return interfaceText("朗读原文", "Listen to Source Text")
+        case .listenTranslation:
+            return interfaceText("朗读译文", "Listen to Translation")
+        case .stopSpeaking:
+            return interfaceText("停止朗读", "Stop Speaking")
         case .swapLanguages:
             return interfaceText("交换语言", "Swap Languages")
-        case .applySpellingCorrection:
-            return interfaceText("应用 Google 拼写修正", "Apply Google Spelling Correction")
-        case .moveFocusOut:
-            return interfaceText("将焦点移出翻译窗口", "Move Focus out of Translation Window")
         case .undo:
             return interfaceText("撤销", "Undo")
         case .redo:
@@ -76,13 +76,13 @@ enum ShortcutAction: String, CaseIterable {
         case .selectAllSource:
             return ShortcutBinding(keyCode: kVK_ANSI_A, modifiers: [.command], keyEquivalent: "a")
         case .listenSource:
-            return ShortcutBinding(keyCode: kVK_ANSI_L, modifiers: [.command], keyEquivalent: "l")
+            return ShortcutBinding(keyCode: kVK_ANSI_9, modifiers: [.command], keyEquivalent: "9")
+        case .listenTranslation:
+            return ShortcutBinding(keyCode: kVK_ANSI_0, modifiers: [.command], keyEquivalent: "0")
+        case .stopSpeaking:
+            return ShortcutBinding(keyCode: kVK_ANSI_Period, modifiers: [.command], keyEquivalent: ".")
         case .swapLanguages:
             return ShortcutBinding(keyCode: kVK_ANSI_S, modifiers: [.command], keyEquivalent: "s")
-        case .applySpellingCorrection:
-            return ShortcutBinding(keyCode: kVK_Return, modifiers: [.command], keyEquivalent: "\r")
-        case .moveFocusOut:
-            return ShortcutBinding(keyCode: kVK_Tab, modifiers: [], keyEquivalent: "\t")
         case .undo:
             return ShortcutBinding(keyCode: kVK_ANSI_Z, modifiers: [.command], keyEquivalent: "z")
         case .redo:

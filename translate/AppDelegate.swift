@@ -180,10 +180,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let aboutItem = NSMenuItem(
             title: interfaceText("关于 Translate", "About Translate"),
-            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            action: #selector(showAboutPanel),
             keyEquivalent: ""
         )
-        aboutItem.target = NSApp
+        aboutItem.target = self
         appMenu.addItem(aboutItem)
         appMenu.addItem(.separator())
 
@@ -253,43 +253,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         addLanguageMenu(to: mainMenu)
         addInterfaceLanguageMenu(to: mainMenu)
-
-        let displayTitle = interfaceText("显示", "Display")
-        let displayMenuItem = NSMenuItem(
-            title: displayTitle,
-            action: nil,
-            keyEquivalent: ""
-        )
-        let displayMenu = NSMenu(title: displayTitle)
-        displayMenuItem.submenu = displayMenu
-        mainMenu.addItem(displayMenuItem)
-
-        TranslateFeature.allCases.forEach { feature in
-            let item = NSMenuItem(
-                title: feature.title,
-                action: #selector(toggleFeatureFromMenu(_:)),
-                keyEquivalent: ""
-            )
-            item.target = self
-            item.representedObject = feature.rawValue
-            item.state = TranslateFeaturePreferences.isEnabled(feature) ? .on : .off
-            featureMenuItems[feature] = item
-            displayMenu.addItem(item)
-        }
-
-        displayMenu.addItem(.separator())
-        let restoreItem = NSMenuItem(
-            title: interfaceText(
-                "恢复推荐显示设置",
-                "Restore Recommended Display Settings"
-            ),
-            action: #selector(restoreRecommendedFeatures),
-            keyEquivalent: ""
-        )
-        restoreItem.target = self
-        displayMenu.addItem(restoreItem)
-
-        addWindowMenu(to: mainMenu)
 
         NSApp.mainMenu = mainMenu
     }
@@ -365,7 +328,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func addLanguageMenu(to mainMenu: NSMenu) {
-        let languageTitle = interfaceText("语言", "Languages")
+        let languageTitle = interfaceText("默认语言", "Default Languages")
         let languageMenuItem = NSMenuItem(
             title: languageTitle,
             action: nil,
@@ -500,6 +463,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showShortcutSettings() {
         if shortcutSettingsController == nil {
             shortcutSettingsController = ShortcutSettingsWindowController(
+                referenceWindow: panel,
                 didChangeShortcuts: { [weak self] in
                     guard let self else { return }
                     self.registerGlobalShortcut()
@@ -509,6 +473,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         shortcutSettingsController?.showWindow(nil)
         shortcutSettingsController?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func showAboutPanel() {
+        let credits = NSAttributedString(
+            string: interfaceText(
+                "GitHub：lalalaladam\n\n致谢原作者：m-inan\n原始项目：github.com/m-inan/mac-translate\n\n本项目是独立重构和扩展版本，未获得原作者官方认可。",
+                "GitHub: lalalaladam\n\nOriginal author: m-inan\nOriginal project: github.com/m-inan/mac-translate\n\nThis is an independent redesign and extension and is not officially endorsed by the original author."
+            ),
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 12),
+                .foregroundColor: NSColor.secondaryLabelColor
+            ]
+        )
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .credits: credits
+        ])
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -674,17 +655,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 private final class ShortcutSettingsWindowController: NSWindowController {
     private let didChangeShortcuts: () -> Void
+    private weak var referenceWindow: NSWindow?
 
-    init(didChangeShortcuts: @escaping () -> Void) {
+    init(
+        referenceWindow: NSWindow?,
+        didChangeShortcuts: @escaping () -> Void
+    ) {
         self.didChangeShortcuts = didChangeShortcuts
+        self.referenceWindow = referenceWindow
         let panel = ShortcutSettingsPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 610),
-            styleMask: [.titled, .closable, .utilityWindow],
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 560),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
+        panel.level = .normal
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
         super.init(window: panel)
         rebuildContent()
     }
@@ -696,14 +687,46 @@ private final class ShortcutSettingsWindowController: NSWindowController {
     override func showWindow(_ sender: Any?) {
         rebuildContent()
         super.showWindow(sender)
+        positionRelativeToTranslator()
+    }
+
+    private func positionRelativeToTranslator() {
+        guard let panel = window else { return }
+        guard let referenceWindow else {
+            panel.center()
+            return
+        }
+
+        let referenceFrame = referenceWindow.frame
+        var origin = NSPoint(
+            x: referenceFrame.midX - panel.frame.width / 2,
+            y: referenceFrame.midY - panel.frame.height / 2
+        )
+
+        // Keep the settings window wholly reachable even when the translator
+        // itself is parked close to a screen edge or on another display.
+        if let visibleFrame = referenceWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+            origin.x = min(max(origin.x, visibleFrame.minX), visibleFrame.maxX - panel.frame.width)
+            origin.y = min(max(origin.y, visibleFrame.minY), visibleFrame.maxY - panel.frame.height)
+        }
+        panel.setFrameOrigin(origin)
     }
 
     private func rebuildContent() {
         guard let panel = window else { return }
         panel.title = interfaceText("快捷键设置", "Shortcut Settings")
 
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 560, height: 610))
-        let root = NSStackView()
+        let content = ShortcutSettingsBackgroundView(
+            frame: NSRect(x: 0, y: 0, width: 560, height: 560)
+        )
+        // Match the main translator window: a real vibrancy surface rather
+        // than an opaque white utility sheet.
+        content.material = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? .dark
+            : .light
+        content.blendingMode = .behindWindow
+        content.state = .active
+        let root = ShortcutSettingsDragStackView()
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 6
@@ -712,7 +735,9 @@ private final class ShortcutSettingsWindowController: NSWindowController {
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
             root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            root.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            // Leave enough room for the traffic lights without creating a
+            // detached second title strip below them.
+            root.topAnchor.constraint(equalTo: content.topAnchor, constant: 38),
             root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20)
         ])
 
@@ -813,15 +838,78 @@ private final class ShortcutSettingsWindowController: NSWindowController {
     }
 }
 
-private final class ShortcutSettingsPanel: NSPanel {
+// This is intentionally a regular window, not an NSPanel: configuration
+// should follow ordinary window ordering and never remain above other apps.
+private final class ShortcutSettingsPanel: NSWindow {
     weak var activeRecorder: ShortcutRecorderButton?
+    private var closeShortcutMonitor: Any?
+
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        installCloseShortcutMonitorIfNeeded()
+        super.makeKeyAndOrderFront(sender)
+    }
+
+    deinit {
+        if let closeShortcutMonitor {
+            NSEvent.removeMonitor(closeShortcutMonitor)
+        }
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        if !(activeRecorder?.isRecording ?? false), isCloseShortcut(event) {
+            performClose(nil)
+            return
+        }
+        super.sendEvent(event)
+    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard let recorder = activeRecorder, recorder.isRecording else {
-            return super.performKeyEquivalent(with: event)
+        if let recorder = activeRecorder, recorder.isRecording {
+            recorder.record(event)
+            return true
         }
-        recorder.record(event)
-        return true
+
+        if isCloseShortcut(event) {
+            performClose(nil)
+            return true
+        }
+
+        return super.performKeyEquivalent(with: event)
+    }
+
+    private func isCloseShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown else { return false }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == .command && event.charactersIgnoringModifiers?.lowercased() == "w"
+    }
+
+    private func installCloseShortcutMonitorIfNeeded() {
+        guard closeShortcutMonitor == nil else { return }
+        closeShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard let self,
+                  self.isKeyWindow,
+                  !(self.activeRecorder?.isRecording ?? false),
+                  self.isCloseShortcut(event) else {
+                return event
+            }
+            self.performClose(nil)
+            return nil
+        }
+    }
+}
+
+// The normal title bar remains draggable, and these two background views add
+// the same behavior to empty content space.  Controls keep their own event
+// handling, so recording or pressing a shortcut button never starts a drag.
+private final class ShortcutSettingsBackgroundView: NSVisualEffectView {
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
+    }
+}
+
+private final class ShortcutSettingsDragStackView: NSStackView {
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
     }
 }
 

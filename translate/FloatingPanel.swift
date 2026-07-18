@@ -165,4 +165,17 @@ class FloatingPanel: NSPanel {
             isDragged = false
         }
     }
+
+    // Native text views now own the visible workspace, so route configured
+    // command shortcuts at the window level instead of relying on the hidden
+    // WKWebView to be the first responder.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown,
+           let action = ShortcutPreferences.action(matching: event),
+           let controller = contentViewController as? ViewController,
+           controller.performShortcut(action) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 }

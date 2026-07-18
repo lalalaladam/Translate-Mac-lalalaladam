@@ -1,14 +1,14 @@
-# Translate Custom
+# Translate — lalalaladam
 
-An unofficial, redesigned macOS translation app built around Google Translate in a compact native window. This project started from [m-inan/mac-translate](https://github.com/m-inan/mac-translate), but has since received substantial feature extensions, interface changes, and window-behavior refactoring. It is not an official version of the original project and is not endorsed by its author.
+A native macOS translation workspace with a glass interface, multilingual support, long-text handling, Spaces behavior, and configurable shortcuts. This is an independent redesign and extension originally derived from [m-inan/mac-translate](https://github.com/m-inan/mac-translate); it is not an official version and is not endorsed by the original author.
 
 ## Current version
 
-The current release is [Translate v1.3.17](https://github.com/lalalaladam/mac-translate-custom/releases/tag/v1.3.17).
+The first standalone release is Translate v1.0.0. Releases will be published at [Translate-Mac-lalalaladam](https://github.com/lalalaladam/Translate-Mac-lalalaladam/releases).
 
-![Translate v1.3.17 interface](media/translate-v1.3.17.png)
+![Translate promotional screenshot](media/translate-1.0.0-promo.png)
 
-The screenshot shows the current compact interface with the native macOS **Translate** (`翻译`), **Languages** (`语言`), **Interface Language** (`界面语言`), **Display** (`显示`), and **Window** (`窗口`) menus, language controls, and the optional window-behavior bar.
+The interface includes the native macOS **Translate** (`翻译`), **Default Languages** (`默认语言`), and **Interface Language** (`界面语言`) menus, centered language controls, glass surfaces, and the optional window-behavior bar.
 
 ## Features
 
@@ -16,12 +16,13 @@ The screenshot shows the current compact interface with the native macOS **Trans
 - Compact two-pane translation interface with selectable source and result text.
 - Copy selected text or copy all source/result text from the native Translate menu.
 - Configurable global and in-window keyboard shortcuts with duplicate detection and restore-defaults support.
-- Native macOS **Translate** (`翻译`), **Languages** (`语言`), **Display** (`显示`), **Window** (`窗口`), and **Interface Language** (`界面语言`) menus.
+- Native macOS **Translate** (`翻译`), **Default Languages** (`默认语言`), and **Interface Language** (`界面语言`) menus.
 - Persistent default source and target languages, with source-only automatic detection.
 - 134 language entries in the language menu, subject to Google Translate availability.
 - Simplified Chinese and English interface modes, including matching Google Translate locale labels.
 - Optional compact-interface controls for pinyin/transliteration, Google selection actions, source/result action buttons, and selected-language highlighting.
-- **Copy All Source Text** (`复制全部原文`), **Copy All Translation** (`复制全部译文`), source-copy control, result-copy-only toolbar, and cleanup of unwanted Google controls and overlays.
+- **Clear Source** (`清除原文`), **Speak Source** (`朗读原文`), **Copy Source** (`复制原文`), **Speak Translation** (`朗读译文`), **Copy Translation** (`复制译文`), and **Translation Complete** (`翻译完成`) controls.
+- **Copy All Source Text** (`复制全部原文`) and **Copy All Translation** (`复制全部译文`) commands, plus cleanup of unwanted Google controls and overlays.
 - Automatic window presentation on launch, connection feedback, retry handling, and manual retry support.
 - macOS dark/light appearance-aware native controls.
 
@@ -29,7 +30,7 @@ The screenshot shows the current compact interface with the native macOS **Trans
 
 Compared with the original [mac-translate](https://github.com/m-inan/mac-translate), this version includes:
 
-- A native Carbon global hotkey implementation with editable **Shortcut Settings…** (`快捷键设置…`).
+- A native Carbon global hotkey implementation with editable **Shortcut Settings…** (`快捷键设置…`) and native speech controls.
 - A normal, activatable macOS window instead of a permanently floating panel.
 - Independent current-Space **Keep on Top** (`置顶`) and **Show on All Spaces** (`所有 Space 显示`) preferences.
 - Support for summoning the window from another application’s full-screen Space on macOS 13 and later.
@@ -41,22 +42,20 @@ Compared with the original [mac-translate](https://github.com/m-inan/mac-transla
 
 ## Download and installation
 
-Download the latest release from the [GitHub Releases page](https://github.com/lalalaladam/mac-translate-custom/releases/latest). For v1.3.17, download `Translate-v1.3.17.zip`, unzip it, and move `Translate.app` to `/Applications`.
+Download the latest release from the [GitHub Releases page](https://github.com/lalalaladam/Translate-Mac-lalalaladam/releases/latest), unzip it, and move `Translate.app` to `/Applications`.
 
 Because the app is distributed outside the Mac App Store and uses an ad-hoc/local signature, macOS may require approval under **System Settings → Privacy & Security → Open Anyway** the first time it is opened.
 
 ## Configuration
 
-The initial default direction is **English** (`英语`) → **Chinese (Simplified)** (`中文（简体）`). Use the native **Languages** (`语言`) menu to choose a persistent default source and target language. Use **Apply Default Languages** (`应用默认语言`) to return to the saved pair after changing languages within Google Translate, or **Restore English → Chinese (Simplified)** (`恢复为英语 → 中文（简体）`) to restore the initial pair.
+The initial default direction is **English** (`英语`) → **Chinese (Simplified)** (`中文（简体）`). Use the native **Default Languages** (`默认语言`) menu to choose a persistent default source and target language. Use **Apply Default Languages** (`应用默认语言`) to return to the saved pair after changing languages within Google Translate, or **Restore English → Chinese (Simplified)** (`恢复为英语 → 中文（简体）`) to restore the initial pair.
 
-The **Display** (`显示`) menu controls four independent compact-interface options:
+The native status-bar menu and in-window controls expose independent window-behavior options:
 
-- **Hide Pinyin and Transliteration** (`隐藏拼音与音译`)
-- **Hide Google Selection Toolbar** (`隐藏 Google 选词工具栏`)
-- **Simplify Source and Result Actions** (`精简左右操作按钮`)
-- **Highlight Selected Translation Languages** (`突出当前翻译语言`)
+- **Keep on Top** (`置顶`)
+- **Show on All Spaces** (`所有 Space 显示`)
 
-All four are enabled by default and can be restored with **Restore Recommended Display Settings** (`恢复推荐显示设置`).
+These controls are available from the bottom behavior bar and the macOS status-bar menu.
 
 ## Keyboard shortcuts
 
@@ -69,10 +68,10 @@ All shortcuts can be changed from **Translate** (`翻译`) → **Shortcut Settin
 | `⌘H` | Hide the application (`隐藏应用`) |
 | `⌘Q` | Quit the application (`退出应用`) |
 | `⌘A` | Select all source text (`选中全部原文`) |
-| `⌘L` | Listen to the source text (`朗读原文`) |
-| `⌘S` | Swap languages (`交换语言`) |
-| `⌘↩` | Apply Google spelling correction when available (`应用 Google 拼写修正`) |
-| `Tab` | Move focus out of the translation window (`将焦点移出翻译窗口`) |
+| `⌘9` | Speak source text (`朗读原文`) |
+| `⌘0` | Speak translation (`朗读译文`) |
+| `⌘.` | Stop speaking (`停止朗读`) |
+| `⇧⌘S` | Swap languages (`交换语言`) |
 | `⌘Z` | Undo (`撤销`) |
 | `⌘R` | Redo (`重做`) |
 | `⌘X` | Cut (`剪切`) |
@@ -85,7 +84,7 @@ The native **Translate** (`翻译`) menu also provides **Copy All Source Text** 
 
 The translation window opens automatically on a cold launch and can be shown or hidden with the global shortcut or the native Translate menu. Closing the window hides it without terminating the application.
 
-Under **Window** (`窗口`), the following preferences are independent and disabled by default:
+The bottom behavior bar and macOS status-bar menu expose the following independent preferences, disabled by default:
 
 - **Keep on Top in the Current Space** (`当前 Space 置顶`) keeps the window above normal windows in its current Space.
 - **Show on All Spaces** (`所有 Space 显示`) makes the window available across Spaces. On macOS 13 and later, it can also be summoned over another application’s full-screen Space (`全屏 Space`).
@@ -96,7 +95,7 @@ Blank areas of the interface can be used to drag the window, while text areas re
 
 The **Interface Language** (`界面语言`) menu switches between **Simplified Chinese** (`简体中文`) and **English** (`英语`) for native menus and Google Translate’s language labels. The choice is saved across launches. Changing it preserves the current source text and temporary translation direction.
 
-The **Languages** (`语言`) menu stores the default translation pair independently from temporary changes made inside Google Translate. **Automatic Detection** (`自动检测`) is available only for the source language, and the app avoids saving the same language as both source and target.
+The **Default Languages** (`默认语言`) menu stores the default translation pair independently from temporary changes made inside Google Translate. **Automatic Detection** (`自动检测`) is available only for the source language, and the app avoids saving the same language as both source and target.
 
 ## System requirements
 
@@ -113,4 +112,4 @@ This project is based on [Mac Translate by m-inan](https://github.com/m-inan/mac
 
 ## Reporting issues and contributing
 
-Please [open an issue](https://github.com/lalalaladam/mac-translate-custom/issues) with reproduction steps, macOS version, app version, and relevant screenshots or logs. Contributions and focused pull requests are welcome. Changes involving Google Translate selectors should include a clear explanation of the affected interface behavior.
+Please [open an issue](https://github.com/lalalaladam/Translate-Mac-lalalaladam/issues) with reproduction steps, macOS version, app version, and relevant screenshots or logs. Contributions and focused pull requests are welcome. Changes involving Google Translate selectors should include a clear explanation of the affected interface behavior.
