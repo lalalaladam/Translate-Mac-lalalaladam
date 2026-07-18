@@ -20,6 +20,567 @@ private final class TranslationSourceTextView: NSTextView {
     }
 }
 
+private enum PronunciationSource {
+    case standard
+    case ai
+    case estimated
+}
+
+/// Fetches standard IPA for English words without loading a web page into the
+/// visible translation workspace. Other languages intentionally return no
+/// pronunciation until a reliable language-specific dictionary is available.
+private struct PronunciationResult {
+    let ipa: String
+    let source: PronunciationSource
+}
+
+private enum PronunciationService {
+    private static let dictionaryAPIBaseURL = "https://api.dictionaryapi.dev/api/v2/entries/en/"
+    private static let oxfordDictionaryBaseURL = "https://www.oxfordlearnersdictionaries.com/definition/english/"
+    private static let wiktionaryAPIBaseURL = "https://en.wiktionary.org/w/api.php"
+
+    static func fetch(
+        word: String,
+        language: TranslateLanguage,
+        completion: @escaping (PronunciationResult?) -> Void
+    ) {
+        guard language == .english,
+              let encodedWord = word.addingPercentEncoding(
+                  withAllowedCharacters: .urlPathAllowed
+              ),
+              let url = URL(string: "\(dictionaryAPIBaseURL)\(encodedWord)") else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+
+        URLSession.shared.dataTask(with: URLRequest(url: url)) { data, response, _ in
+            if let data,
+               (response as? HTTPURLResponse).map({ 200..<300 ~= $0.statusCode }) == true,
+               let pronunciation = pronunciation(from: data) {
+                DispatchQueue.main.async {
+                    completion(PronunciationResult(ipa: pronunciation, source: .standard))
+                }
+                return
+            }
+
+            fetchFromOxford(word: word, completion: completion)
+        }.resume()
+    }
+
+    private static func pronunciation(from data: Data) -> String? {
+        guard let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return nil
+        }
+
+        for entry in entries {
+            if let phonetic = entry["phonetic"] as? String,
+               !phonetic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return phonetic
+            }
+
+            guard let phonetics = entry["phonetics"] as? [[String: Any]] else { continue }
+            for item in phonetics {
+                if let text = item["text"] as? String,
+                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return text
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func fetchFromOxford(
+        word: String,
+        completion: @escaping (PronunciationResult?) -> Void
+    ) {
+        guard let encodedWord = word.lowercased().addingPercentEncoding(
+            withAllowedCharacters: .urlPathAllowed
+        ),
+        let url = URL(string: "\(oxfordDictionaryBaseURL)\(encodedWord)") else {
+            fetchFromWiktionary(word: word, completion: completion)
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue(
+            "Translate/1.0 (macOS pronunciation lookup)",
+            forHTTPHeaderField: "User-Agent"
+        )
+        request.setValue("text/html", forHTTPHeaderField: "Accept")
+
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            guard let data,
+                  (response as? HTTPURLResponse).map({ 200..<300 ~= $0.statusCode }) == true,
+                  let html = String(data: data, encoding: .utf8),
+                  let pronunciation = pronunciationFromOxfordHTML(html) else {
+                fetchFromWiktionary(word: word, completion: completion)
+                return
+            }
+            DispatchQueue.main.async {
+                completion(PronunciationResult(ipa: pronunciation, source: .standard))
+            }
+        }.resume()
+    }
+
+    private static func pronunciationFromOxfordHTML(_ html: String) -> String? {
+        let pattern = #"(?is)<span\s+class=[\"']phon[\"'][^>]*>\s*([^<]+?)\s*</span>"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+
+        let matches = expression.matches(
+            in: html,
+            range: NSRange(html.startIndex..., in: html)
+        )
+        for match in matches {
+            guard let range = Range(match.range(at: 1), in: html) else { continue }
+            let value = String(html[range])
+                .replacingOccurrences(of: "&nbsp;", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private static func fetchFromWiktionary(
+        word: String,
+        completion: @escaping (PronunciationResult?) -> Void
+    ) {
+        var components = URLComponents(string: wiktionaryAPIBaseURL)
+        components?.queryItems = [
+            URLQueryItem(name: "action", value: "parse"),
+            URLQueryItem(name: "page", value: word),
+            URLQueryItem(name: "prop", value: "wikitext"),
+            URLQueryItem(name: "format", value: "json"),
+            URLQueryItem(name: "formatversion", value: "2"),
+            URLQueryItem(name: "origin", value: "*")
+        ]
+
+        guard let url = components?.url else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+
+        URLSession.shared.dataTask(with: URLRequest(url: url)) { data, response, _ in
+            guard let data,
+                  (response as? HTTPURLResponse).map({ 200..<300 ~= $0.statusCode }) == true,
+                  let wikitext = wikitext(from: data),
+                  let pronunciation = pronunciationFromEnglishWikitext(wikitext) else {
+                fetchFromGoogleSearch(word: word, completion: completion)
+                return
+            }
+            DispatchQueue.main.async {
+                completion(PronunciationResult(ipa: pronunciation, source: .standard))
+            }
+        }.resume()
+    }
+
+    private static func wikitext(from data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let parse = object["parse"] as? [String: Any] else {
+            return nil
+        }
+
+        if let wikitext = parse["wikitext"] as? String {
+            return wikitext
+        }
+        if let wikitextObject = parse["wikitext"] as? [String: Any] {
+            return wikitextObject["*"] as? String
+        }
+        return nil
+    }
+
+    private static func pronunciationFromEnglishWikitext(_ wikitext: String) -> String? {
+        // Limit matching to the English language section so a page containing
+        // several languages cannot return another language's pronunciation.
+        let englishSectionPattern = #"(?ms)^==\s*English\s*==\s*(.*?)(?=^==[^=].*==\s*$|\z)"#
+        guard let sectionExpression = try? NSRegularExpression(pattern: englishSectionPattern),
+              let sectionMatch = sectionExpression.firstMatch(
+                  in: wikitext,
+                  range: NSRange(wikitext.startIndex..., in: wikitext)
+              ),
+              let sectionRange = Range(sectionMatch.range(at: 1), in: wikitext) else {
+            return nil
+        }
+
+        let englishSection = String(wikitext[sectionRange])
+        let templatePattern = #"\{\{\s*IPA(?:char)?\s*\|([^{}]*)\}\}"#
+        guard let templateExpression = try? NSRegularExpression(pattern: templatePattern) else {
+            return nil
+        }
+
+        let matches = templateExpression.matches(
+            in: englishSection,
+            range: NSRange(englishSection.startIndex..., in: englishSection)
+        )
+        for match in matches {
+            guard let contentRange = Range(match.range(at: 1), in: englishSection) else {
+                continue
+            }
+            let parameters = englishSection[contentRange]
+                .split(separator: "|", omittingEmptySubsequences: true)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+            for parameter in parameters {
+                let value = parameter
+                    .replacingOccurrences(of: "<!--.*?-->", with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !value.isEmpty,
+                      value != "en",
+                      !value.contains("="),
+                      value.range(of: #"[\[\]/ˈˌəɪʊɔɑæɛɜɒθðʃʒŋː]"#, options: .regularExpression) != nil else {
+                    continue
+                }
+                return value
+            }
+        }
+        return nil
+    }
+
+    private static func fetchFromGoogleSearch(
+        word: String,
+        completion: @escaping (PronunciationResult?) -> Void
+    ) {
+        // WebKit website data stores must be created and used from the main
+        // thread. This fallback is reached from URLSession callbacks, which
+        // otherwise causes WebKit to raise an EXC_BREAKPOINT and terminate
+        // the app for words missing from the dictionary sources.
+        DispatchQueue.main.async {
+            // Show a conservative estimate immediately when one is available.
+            // The hidden Google lookup continues in the background and can
+            // replace it later with an AI or standard result.
+            if let ipa = estimatedPronunciation(for: word) {
+                completion(PronunciationResult(ipa: ipa, source: .estimated))
+            }
+
+            BackgroundGooglePronunciationLookup.shared.fetch(
+                word: word,
+                completion: { result in
+                    if let result {
+                        completion(result)
+                    } else if estimatedPronunciation(for: word) == nil {
+                        completion(nil)
+                    }
+                }
+            )
+        }
+    }
+
+    /// Conservative fallback pronunciations for common coined, slang, and
+    /// compound words that may not yet have a dictionary entry. These values
+    /// are deliberately marked as estimated in the interface and are never
+    /// presented as authoritative dictionary IPA.
+    private static func estimatedPronunciation(for word: String) -> String? {
+        let estimates: [String: String] = [
+            "infollution": "/ˌɪn.fəˈluː.ʃən/",
+            "interstellar": "/ˌɪn.təˈstel.ər/",
+            "rizz": "/rɪz/",
+            "delulu": "/dəˈluː.luː/",
+            "cheugy": "/ˈtʃuː.ɡi/",
+            "boujee": "/ˈbuː.dʒi/",
+            "skibidi": "/ˈskɪ.bɪ.di/",
+            "finfluencer": "/ˈfɪn.flu.ən.sər/",
+            "situationship": "/ˌsɪtʃ.uˈeɪ.ʃən.ʃɪp/",
+            "nomophobia": "/ˌnoʊ.məˈfoʊ.bi.ə/",
+            "quinoa": "/ˈkiːn.wɑː/",
+            "goat": "/ɡoʊt/",
+            "grwm": "/ˈɡɜːr.wəm/"
+        ]
+        let normalizedWord = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let estimate = estimates[normalizedWord] {
+            return estimate
+        }
+        return generatedEstimate(for: normalizedWord)
+    }
+
+    /// Generates a deliberately approximate pronunciation for an English word
+    /// that has no dictionary or web result. This is a fallback of last resort:
+    /// it uses common spelling patterns, does not claim a dialect, and is
+    /// always displayed with the "Estimated"/"推测" label.
+    private static func generatedEstimate(for word: String) -> String? {
+        guard word.count >= 2,
+              word.unicodeScalars.allSatisfy({
+                  (97...122).contains($0.value)
+              }) else {
+            return nil
+        }
+
+        var spelling = word
+        if spelling.hasSuffix("e"), spelling.count > 3 {
+            spelling.removeLast()
+        }
+
+        let spellingPatterns: [(String, String)] = [
+            ("eigh", "eɪ"),
+            ("ough", "ɔː"),
+            ("tion", "ʃən"),
+            ("sion", "ʒən"),
+            ("cian", "ʃən"),
+            ("ture", "tʃər"),
+            ("dge", "dʒ"),
+            ("igh", "aɪ"),
+            ("ph", "f"),
+            ("ch", "tʃ"),
+            ("sh", "ʃ"),
+            ("th", "θ"),
+            ("wh", "w"),
+            ("qu", "kw"),
+            ("ck", "k"),
+            ("ng", "ŋ"),
+            ("ee", "iː"),
+            ("ea", "iː"),
+            ("oo", "uː"),
+            ("ou", "aʊ"),
+            ("ow", "aʊ"),
+            ("oi", "ɔɪ"),
+            ("oy", "ɔɪ"),
+            ("ai", "eɪ"),
+            ("ay", "eɪ"),
+            ("oa", "oʊ")
+        ]
+        for (pattern, replacement) in spellingPatterns {
+            spelling = spelling.replacingOccurrences(of: pattern, with: replacement)
+        }
+
+        let characters = Array(spelling)
+        var pronunciation = ""
+        for index in characters.indices {
+            let character = characters[index]
+            if "ɑɐɒæəɛɜɪɨʊɔːˈˌθðʃʒŋɡʔ".contains(character) {
+                pronunciation.append(character)
+                continue
+            }
+
+            let nextCharacter = characters.indices.contains(index + 1)
+                ? characters[index + 1]
+                : nil
+            let nextCharacterSoftensConsonant = nextCharacter.map {
+                "eiy".contains($0)
+            } ?? false
+            switch character {
+            case "a":
+                pronunciation += "æ"
+            case "e":
+                pronunciation += "ɛ"
+            case "i":
+                pronunciation += "ɪ"
+            case "o":
+                pronunciation += "ɒ"
+            case "u":
+                pronunciation += "ʌ"
+            case "y":
+                pronunciation += "i"
+            case "c":
+                pronunciation += nextCharacterSoftensConsonant ? "s" : "k"
+            case "g":
+                pronunciation += nextCharacterSoftensConsonant ? "dʒ" : "ɡ"
+            case "j":
+                pronunciation += "dʒ"
+            case "q":
+                pronunciation += "k"
+            case "x":
+                pronunciation += "ks"
+            case "r":
+                pronunciation += "r"
+            case "b", "d", "f", "h", "k", "l", "m", "n", "p", "s", "t", "v", "w", "z":
+                pronunciation.append(character)
+            default:
+                pronunciation.append(character)
+            }
+        }
+
+        guard pronunciation.range(
+            of: #"[æəɛɪʊɔɑʌiːeɪoʊaɪɔɪ]"#,
+            options: .regularExpression
+        ) != nil else {
+            return nil
+        }
+        return "/\(pronunciation)/"
+    }
+}
+
+/// Last-resort, no-key lookup. This WebView is never attached to the app's
+/// visible view hierarchy; it only reads a public Google Search result after
+/// the dictionary sources have failed. Search and AI results can change or be
+/// unavailable, so callers must treat this result as non-authoritative.
+private final class BackgroundGooglePronunciationLookup: NSObject, WKNavigationDelegate {
+    static let shared = BackgroundGooglePronunciationLookup()
+
+    private let webView: WKWebView
+    private var pendingCompletion: ((PronunciationResult?) -> Void)?
+    private var timeoutWorkItem: DispatchWorkItem?
+    private var queryCandidates: [String] = []
+    private var queryIndex = 0
+
+    private override init() {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1, height: 1), configuration: configuration)
+        webView.isHidden = true
+        super.init()
+        webView.navigationDelegate = self
+        webView.customUserAgent =
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15"
+    }
+
+    func fetch(
+        word: String,
+        completion: @escaping (PronunciationResult?) -> Void
+    ) {
+        finish(nil)
+        pendingCompletion = completion
+        queryCandidates = [
+            "\"\(word)\" pronunciation IPA",
+            "\"\(word)\" phonetic pronunciation",
+            "how to pronounce \"\(word)\"",
+            "What is the IPA pronunciation of \"\(word)\"?"
+        ]
+        queryIndex = 0
+        loadCurrentQuery()
+    }
+
+    private func loadCurrentQuery() {
+        guard pendingCompletion != nil,
+              queryCandidates.indices.contains(queryIndex) else {
+            finish(nil)
+            return
+        }
+
+        timeoutWorkItem?.cancel()
+        timeoutWorkItem = nil
+
+        var components = URLComponents(string: "https://www.google.com/search")
+        components?.queryItems = [
+            URLQueryItem(
+                name: "q",
+                value: queryCandidates[queryIndex]
+            ),
+            URLQueryItem(name: "hl", value: "en"),
+            URLQueryItem(name: "num", value: "10")
+        ]
+        guard let url = components?.url else {
+            finish(nil)
+            return
+        }
+
+        timeoutWorkItem = DispatchWorkItem { [weak self] in
+            self?.finish(nil)
+        }
+        if let timeoutWorkItem {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12, execute: timeoutWorkItem)
+        }
+        webView.load(URLRequest(url: url))
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        inspectPage(attempt: 0)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFail navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        loadNextQuery()
+    }
+
+    private func inspectPage(attempt: Int) {
+        guard pendingCompletion != nil else { return }
+        webView.evaluateJavaScript(
+            "document.body ? document.body.innerText : ''"
+        ) { [weak self] result, _ in
+            guard let self else { return }
+            let text = result as? String ?? ""
+            if let result = self.result(from: text) {
+                self.finish(result)
+                return
+            }
+            guard attempt < 20 else {
+                self.loadNextQuery()
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.inspectPage(attempt: attempt + 1)
+            }
+        }
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        loadNextQuery()
+    }
+
+    private func loadNextQuery() {
+        guard pendingCompletion != nil else { return }
+        queryIndex += 1
+        loadCurrentQuery()
+    }
+
+    private func result(from text: String) -> PronunciationResult? {
+        let aiResponse = text.range(
+            of: #"(?i)AI\s*(Overview|Mode)|AI\s*(概览|模式)"#,
+            options: .regularExpression
+        ) != nil
+
+        let patterns = [
+            #"(?i)(?:IPA|pronunciation|pronounced|phonetic)[^/\n]{0,40}/(?:(?!/|\n).){2,80}/"#,
+            #"/(?:(?!/|\n).){2,80}/"#,
+            #"(?i)(?:IPA|pronunciation|pronounced|phonetic)[^\[\n]{0,40}\[(?:(?!\]|\n).){2,80}\]"#,
+            #"\[(?:(?!\]|\n).){2,80}\]"#
+        ]
+        for pattern in patterns {
+            guard let expression = try? NSRegularExpression(pattern: pattern) else {
+                continue
+            }
+            let matches = expression.matches(
+                in: text,
+                range: NSRange(text.startIndex..., in: text)
+            )
+            for match in matches {
+                guard let range = Range(match.range, in: text) else { continue }
+                var value = String(text[range])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if let slashStart = value.firstIndex(of: "/"),
+                   let slashEnd = value.lastIndex(of: "/"),
+                   slashStart < slashEnd {
+                    value = String(value[slashStart...slashEnd])
+                } else if let bracketStart = value.firstIndex(of: "["),
+                          let bracketEnd = value.lastIndex(of: "]"),
+                          bracketStart < bracketEnd {
+                    value = String(value[bracketStart...bracketEnd])
+                }
+                guard value.range(
+                    of: #"[ɑɐɒæəɛɜɪɨʊɔːˈˌθðʃʒŋɡʔ]"#,
+                    options: .regularExpression
+                ) != nil else {
+                    continue
+                }
+                return PronunciationResult(
+                    ipa: value,
+                    source: aiResponse ? .ai : .standard
+                )
+            }
+        }
+        return nil
+    }
+
+    private func finish(_ result: PronunciationResult?) {
+        timeoutWorkItem?.cancel()
+        timeoutWorkItem = nil
+        let completion = pendingCompletion
+        pendingCompletion = nil
+        guard let completion else { return }
+        DispatchQueue.main.async {
+            completion(result)
+        }
+    }
+}
+
 /// Borderless AppKit button with a small press response.  This avoids the
 /// textured button's dashed focus ring and accent-blue template tint while
 /// retaining clear click feedback.
@@ -125,13 +686,16 @@ private final class NativeLanguagePickerController: NSViewController,
     }
 
     override func loadView() {
+        let isDark = NSApp.effectiveAppearance
+            .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let background = NSVisualEffectView(
             frame: NSRect(x: 0, y: 0, width: 300, height: 390)
         )
-        // Keep the picker visually part of Translate's glass surface instead
-        // of leaving the table on AppKit's opaque white default background.
-        background.material = .popover
-        background.blendingMode = .withinWindow
+        // Use the same behind-window glass treatment as the main translator
+        // surface. The popover material is intentionally avoided because it
+        // produces a denser grey sheet than the app's transparent window.
+        background.material = isDark ? .dark : .light
+        background.blendingMode = .behindWindow
         background.state = .active
         view = background
 
@@ -156,12 +720,14 @@ private final class NativeLanguagePickerController: NSViewController,
 
         let searchSurface = NSVisualEffectView()
         searchSurface.translatesAutoresizingMaskIntoConstraints = false
-        searchSurface.material = .menu
+        searchSurface.material = isDark ? .dark : .light
         searchSurface.blendingMode = .withinWindow
         searchSurface.state = .active
         searchSurface.wantsLayer = true
         searchSurface.layer?.cornerRadius = 11
         searchSurface.layer?.masksToBounds = true
+        searchSurface.layer?.backgroundColor = NSColor.labelColor
+            .withAlphaComponent(isDark ? 0.08 : 0.045).cgColor
 
         let scrollView = NSScrollView()
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -303,6 +869,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         case translation
     }
 
+    private enum PronunciationPane: Equatable {
+        case source
+        case translation
+    }
+
     public var isReady = false
     private var readyHandlers: [() -> Void] = []
 
@@ -335,6 +906,18 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var longTextStatusLabel: NSTextField?
     private var longTextSourceLabel: NSTextField?
     private var longTextTranslationLabel: NSTextField?
+    private var sourcePronunciationRow: NSView?
+    private var translationPronunciationRow: NSView?
+    private var sourcePronunciationLabel: NSTextField?
+    private var translationPronunciationLabel: NSTextField?
+    private var sourcePronunciationValue: String?
+    private var translationPronunciationValue: String?
+    private var sourcePronunciationSource: PronunciationSource = .standard
+    private var translationPronunciationSource: PronunciationSource = .standard
+    private var sourcePronunciationKey: String?
+    private var translationPronunciationKey: String?
+    private var sourcePronunciationGeneration = 0
+    private var translationPronunciationGeneration = 0
     private var workspaceSourceLanguageButton: NSButton?
     private var workspaceTargetLanguageButton: NSButton?
     private var workspaceSwapButton: NSButton?
@@ -872,9 +1455,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             }
         }
 
-        // Keep window movement completely outside the web content. These
-        // narrow native strips behave like a conventional title bar while
-        // source/result text remains exclusively available for selection.
+        // Keep window movement completely outside the web content. The top
+        // strip behaves like a conventional title bar; the native behavior
+        // bar below handles dragging in its own empty areas, so no full-width
+        // overlay can cover the result actions.
         let edgeInset: CGFloat = 4
         let handleHeight: CGFloat = 14
         let topHandle = WindowDragHandleView(
@@ -887,17 +1471,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         )
         topHandle.autoresizingMask = [.width, .minYMargin]
         self.view.addSubview(topHandle)
-
-        let bottomHandle = WindowDragHandleView(
-            frame: NSRect(
-                x: 0,
-                y: Self.windowBehaviorBarHeight + edgeInset,
-                width: self.view.bounds.width,
-                height: handleHeight
-            )
-        )
-        bottomHandle.autoresizingMask = [.width, .maxYMargin]
-        self.view.addSubview(bottomHandle)
 
         // Do not leave a blank panel while a network service or VPN is still
         // starting. The overlay is replaced by Google Translate as soon as
@@ -1186,6 +1759,8 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         let translationView = makeLongTextView(editable: false)
         let sourceScroll = makeLongTextScrollView(with: sourceView)
         let translationScroll = makeLongTextScrollView(with: translationView)
+        let (sourcePronunciationRow, sourcePronunciationLabel) = makePronunciationRow()
+        let (translationPronunciationRow, translationPronunciationLabel) = makePronunciationRow()
 
         // Keep footer actions secondary to the word/character count.  The
         // 30pt button frame remains an easy click target, while the SF Symbol
@@ -1269,20 +1844,26 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         translationScroll.setContentHuggingPriority(.defaultLow, for: .vertical)
         translationScroll.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
 
-        let sourceStack = NSStackView(views: [sourceScroll, sourceFooter])
+        let sourceStack = NSStackView(views: [sourceScroll, sourcePronunciationRow, sourceFooter])
         sourceStack.orientation = .vertical
         sourceStack.alignment = .leading
         sourceStack.spacing = 0
         sourceStack.translatesAutoresizingMaskIntoConstraints = false
         sourceScroll.widthAnchor.constraint(equalTo: sourceStack.widthAnchor).isActive = true
+        sourcePronunciationRow.widthAnchor.constraint(equalTo: sourceStack.widthAnchor).isActive = true
         sourceFooter.widthAnchor.constraint(equalTo: sourceStack.widthAnchor).isActive = true
 
-        let translationStack = NSStackView(views: [translationScroll, translationFooter])
+        let translationStack = NSStackView(views: [
+            translationScroll,
+            translationPronunciationRow,
+            translationFooter
+        ])
         translationStack.orientation = .vertical
         translationStack.alignment = .leading
         translationStack.spacing = 0
         translationStack.translatesAutoresizingMaskIntoConstraints = false
         translationScroll.widthAnchor.constraint(equalTo: translationStack.widthAnchor).isActive = true
+        translationPronunciationRow.widthAnchor.constraint(equalTo: translationStack.widthAnchor).isActive = true
         translationFooter.widthAnchor.constraint(equalTo: translationStack.widthAnchor).isActive = true
 
         let splitView = NSSplitView()
@@ -1334,6 +1915,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextStatusLabel = status
         longTextSourceLabel = sourceLabel
         longTextTranslationLabel = translationLabel
+        self.sourcePronunciationRow = sourcePronunciationRow
+        self.translationPronunciationRow = translationPronunciationRow
+        self.sourcePronunciationLabel = sourcePronunciationLabel
+        self.translationPronunciationLabel = translationPronunciationLabel
         workspaceSourceLanguageButton = sourceLanguageButton
         workspaceTargetLanguageButton = targetLanguageButton
         workspaceSwapButton = swapButton
@@ -1343,6 +1928,36 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         workspaceSourceCountLabel = sourceLabel
         workspaceTranslationCountLabel = translationLabel
         updateLongTextOverlayAppearance()
+    }
+
+    private func makePronunciationRow() -> (NSView, NSTextField) {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 0
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        row.isHidden = true
+
+        let leadingInset = NSView()
+        leadingInset.translatesAutoresizingMaskIntoConstraints = false
+        leadingInset.widthAnchor.constraint(equalToConstant: 18).isActive = true
+
+        let label = NSTextField(labelWithString: "")
+        label.font = .systemFont(ofSize: 14, weight: .regular)
+        label.textColor = .secondaryLabelColor
+        label.alignment = .left
+        label.lineBreakMode = .byTruncatingTail
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        label.setContentHuggingPriority(.required, for: .horizontal)
+
+        let trailingSpace = NSView()
+        trailingSpace.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        row.addArrangedSubview(leadingInset)
+        row.addArrangedSubview(label)
+        row.addArrangedSubview(trailingSpace)
+        return (row, label)
     }
 
     private func makeLongTextView(editable: Bool) -> NSTextView {
@@ -1415,6 +2030,12 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextStatusLabel?.textColor = textColor
         longTextSourceLabel?.textColor = textColor
         longTextTranslationLabel?.textColor = textColor
+        let pronunciationColor = isDarkMode
+            ? NSColor.white.withAlphaComponent(0.72)
+            : NSColor.secondaryLabelColor
+        sourcePronunciationLabel?.textColor = pronunciationColor
+        translationPronunciationLabel?.textColor = pronunciationColor
+        refreshPronunciationDisplayLabels()
         refreshWorkspaceLanguageTitles()
     }
 
@@ -2462,6 +3083,14 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                         const element = target && target.closest ? target : null;
                         if (!element) return;
 
+                        // Result toolbars can be nested inside the result text
+                        // container. Let their native actions receive the
+                        // click instead of treating the button as a text
+                        // click that opens Google's word-by-word panel.
+                        if (element.closest(
+                            'button, a, [role="button"], input, select, textarea'
+                        )) return;
+
                         const detail = element.closest(detailSelector);
                         const result = element.closest(resultTextSelector);
                         if (detail || result) {
@@ -2743,6 +3372,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         // Do not write into the editor while an IME has marked (uncommitted)
         // text, otherwise Chinese/Japanese composition is committed or lost.
         guard longTextSourceView?.hasMarkedText() != true else { return }
+        guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            clearLongTextTranslationForEmptyInput()
+            return
+        }
         let chunks = splitLongText(source)
         longTextSession += 1
         longTextSource = source
@@ -2787,6 +3420,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
     private func queueLongTextTranslation(_ source: String) {
         longTextDebounceWorkItem?.cancel()
+        guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            clearLongTextTranslationForEmptyInput()
+            return
+        }
         longTextSession += 1
         longTextSource = source
         longTextTranslation = ""
@@ -2805,6 +3442,31 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         }
         longTextDebounceWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: workItem)
+    }
+
+    private func clearLongTextTranslationForEmptyInput() {
+        longTextDebounceWorkItem?.cancel()
+        longTextSession += 1
+        longTextSource = nil
+        longTextTranslation = ""
+        longTextChunks = []
+        longTextChunkIndex = 0
+        longTextPollAttempts = 0
+        longTextLastWebTranslation = nil
+        longTextCandidateTranslation = nil
+        longTextCandidateStablePolls = 0
+        longTextOverlay?.isHidden = false
+
+        isUpdatingNativeWorkspace = true
+        longTextSourceView?.string = ""
+        longTextTranslationView?.string = ""
+        isUpdatingNativeWorkspace = false
+
+        setLongTextStatus(.idle)
+        updateLongTextLabels()
+        // Keep the app-owned inline workspace in sync when this path is
+        // reached from its editable source, without showing a network error.
+        updateInlineLongText(source: "", translation: "", status: "")
     }
 
     // Google accepts roughly 5,000 source characters, but its web result DOM
@@ -3453,6 +4115,13 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
     private func updateLongTextLabels() {
         guard let source = longTextSource else {
+            longTextStatusLabel?.stringValue = ""
+            let emptyCount = textCountDescription("")
+            workspaceSourceCountLabel?.stringValue = emptyCount
+            workspaceTranslationCountLabel?.stringValue = emptyCount
+            longTextSourceLabel?.stringValue = emptyCount
+            longTextTranslationLabel?.stringValue = emptyCount
+            updatePronunciationLabels(source: "", translation: "")
             refreshWorkspaceLanguageTitles()
             return
         }
@@ -3464,6 +4133,128 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         workspaceTranslationCountLabel?.stringValue = translationCount
         longTextSourceLabel?.stringValue = sourceCount
         longTextTranslationLabel?.stringValue = translationCount
+        updatePronunciationLabels(source: source, translation: longTextTranslation)
+    }
+
+    private func updatePronunciationLabels(source: String, translation: String) {
+        updatePronunciationLabel(
+            text: source,
+            language: currentSourceLanguage,
+            row: sourcePronunciationRow,
+            label: sourcePronunciationLabel,
+            pane: .source
+        )
+        updatePronunciationLabel(
+            text: translation,
+            language: currentTargetLanguage,
+            row: translationPronunciationRow,
+            label: translationPronunciationLabel,
+            pane: .translation
+        )
+    }
+
+    private func updatePronunciationLabel(
+        text: String,
+        language: TranslateLanguage,
+        row: NSView?,
+        label: NSTextField?,
+        pane: PronunciationPane
+    ) {
+        let word = singleWordForPronunciation(text)
+        let key = word.map { "\(language.rawValue)|\($0.lowercased())" }
+        let cachedKey = pane == .source
+            ? sourcePronunciationKey
+            : translationPronunciationKey
+        guard key != cachedKey else {
+            refreshPronunciationDisplayLabel(for: pane)
+            return
+        }
+
+        if pane == .source {
+            sourcePronunciationKey = key
+            sourcePronunciationValue = nil
+            sourcePronunciationSource = .standard
+            sourcePronunciationGeneration += 1
+        } else {
+            translationPronunciationKey = key
+            translationPronunciationValue = nil
+            translationPronunciationSource = .standard
+            translationPronunciationGeneration += 1
+        }
+        let requestGeneration = pane == .source
+            ? sourcePronunciationGeneration
+            : translationPronunciationGeneration
+        row?.isHidden = true
+        label?.stringValue = ""
+
+        guard let word else { return }
+        PronunciationService.fetch(word: word, language: language) { [weak self] pronunciation in
+            guard let self,
+                  (pane == .source
+                      ? self.sourcePronunciationGeneration == requestGeneration
+                      : self.translationPronunciationGeneration == requestGeneration),
+                  (pane == .source
+                      ? self.sourcePronunciationKey == key
+                      : self.translationPronunciationKey == key),
+                  let pronunciation,
+                  !pronunciation.ipa.isEmpty else { return }
+            if pane == .source {
+                self.sourcePronunciationValue = pronunciation.ipa
+                self.sourcePronunciationSource = pronunciation.source
+            } else {
+                self.translationPronunciationValue = pronunciation.ipa
+                self.translationPronunciationSource = pronunciation.source
+            }
+            self.refreshPronunciationDisplayLabel(for: pane)
+            row?.isHidden = false
+        }
+    }
+
+    private func refreshPronunciationDisplayLabels() {
+        refreshPronunciationDisplayLabel(for: .source)
+        refreshPronunciationDisplayLabel(for: .translation)
+    }
+
+    private func refreshPronunciationDisplayLabel(for pane: PronunciationPane) {
+        let value: String?
+        let source: PronunciationSource
+        let label: NSTextField?
+        switch pane {
+        case .source:
+            value = sourcePronunciationValue
+            source = sourcePronunciationSource
+            label = sourcePronunciationLabel
+        case .translation:
+            value = translationPronunciationValue
+            source = translationPronunciationSource
+            label = translationPronunciationLabel
+        }
+        guard let value else {
+            label?.stringValue = ""
+            return
+        }
+        switch source {
+        case .standard:
+            label?.stringValue = interfaceText("音标  \(value)", "IPA  \(value)")
+        case .ai:
+            label?.stringValue = interfaceText("AI 返回  \(value)", "AI result  \(value)")
+        case .estimated:
+            label?.stringValue = interfaceText("推测  \(value)", "Estimated  \(value)")
+        }
+    }
+
+    private func singleWordForPronunciation(_ text: String) -> String? {
+        let candidate = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidate.isEmpty else { return nil }
+        let pattern = #"^[\p{L}\p{M}]+(?:['’\-][\p{L}\p{M}]+)*$"#
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              expression.firstMatch(
+                  in: candidate,
+                  range: NSRange(candidate.startIndex..., in: candidate)
+              ) != nil else {
+            return nil
+        }
+        return candidate
     }
 
     @discardableResult
@@ -3537,10 +4328,22 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             longTextSession += 1
             return
         }
-        if sourceView.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let source = sourceView.string
+        if source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             stopSpeaking()
         }
-        queueLongTextTranslation(sourceView.string)
+
+        // A line break appended at the end is only formatting. Keep the
+        // existing translation until the user enters actual text after it;
+        // otherwise every standalone Return would start a new network request.
+        let sourceWithoutTrailingLineBreaks = source.trimmingCharacters(in: .newlines)
+        let previousWithoutTrailingLineBreaks = longTextSource?.trimmingCharacters(in: .newlines)
+        if !sourceWithoutTrailingLineBreaks.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           sourceWithoutTrailingLineBreaks == previousWithoutTrailingLineBreaks {
+            return
+        }
+
+        queueLongTextTranslation(source)
     }
 
     @objc private func workspaceClearSource() {
