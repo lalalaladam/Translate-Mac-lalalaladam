@@ -890,6 +890,21 @@ class ViewController: NSViewController, WKNavigationDelegate {
                         .feedback-link {
                             display: none !important;
                         }
+
+                        /* A result toolbar is rebuilt in stages by Google:
+                           the Google-search button can be painted before its
+                           final accessibility label exists. Keep the whole
+                           toolbar invisible until the lightweight cleanup has
+                           positively retained its copy button. */
+                        .QcsUad .VO9ucd {
+                            opacity: 0 !important;
+                            pointer-events: none !important;
+                        }
+
+                        .QcsUad .VO9ucd[data-mac-translate-actions-ready="1"] {
+                            opacity: 1 !important;
+                            pointer-events: auto !important;
+                        }
                     ` : ""}
                 `;
 
@@ -1061,6 +1076,7 @@ class ViewController: NSViewController, WKNavigationDelegate {
                         if (child !== actionGroup && !child.contains(copyControl)) hide(child);
                     });
                     toolbar.style.setProperty("justify-content", "flex-end", "important");
+                    toolbar.setAttribute("data-mac-translate-actions-ready", "1");
                 };
 
                 // “查字典/Lookup” is unique to Google's contextual selection
@@ -1247,25 +1263,54 @@ class ViewController: NSViewController, WKNavigationDelegate {
 
                 };
 
-                let cleanupScheduled = false;
-                const scheduleCleanup = () => {
-                    if (cleanupScheduled) return;
+                var cleanupScheduled = false;
+                var cleanupTimer = null;
+                const scheduleCleanup = (delay = 160) => {
+                    if (cleanupTimer) clearTimeout(cleanupTimer);
                     cleanupScheduled = true;
-                    queueMicrotask(() => {
+                    cleanupTimer = setTimeout(() => {
+                        cleanupTimer = null;
                         cleanupScheduled = false;
                         cleanup();
-                    });
+                    }, delay);
                 };
                 window.__macTranslateScheduleCleanup = scheduleCleanup;
 
                 if (!window.__macTranslateInstalled) {
                     window.__macTranslateInstalled = true;
-                    const observer = new MutationObserver(scheduleCleanup);
+                    // Google changes many DOM nodes for every individual
+                    // keystroke.  Watching style/class changes made this
+                    // custom cleanup scan the entire page repeatedly while
+                    // typing. New UI (results, pinyin and selection bars)
+                    // still arrives as child nodes, so observe only those
+                    // and coalesce the work after the page settles.
+                    const observer = new MutationObserver((records) => {
+                        let resultToolbarChanged = false;
+                        for (const record of records) {
+                            for (const node of record.addedNodes) {
+                                const element = node.nodeType === Node.ELEMENT_NODE
+                                    ? node
+                                    : node.parentElement;
+                                const toolbar = element && (
+                                    element.matches?.(".QcsUad .VO9ucd")
+                                        ? element
+                                        : element.closest?.(".QcsUad .VO9ucd")
+                                );
+                                if (toolbar) {
+                                    // This synchronous, local operation runs
+                                    // before a frame is painted. It prevents
+                                    // Google's G action from flashing while
+                                    // avoiding the expensive full-page scan.
+                                    toolbar.setAttribute("data-mac-translate-actions-ready", "0");
+                                    resultToolbarChanged = true;
+                                }
+                            }
+                        }
+                        scheduleCleanup(resultToolbarChanged ? 50 : 240);
+                    });
                     observer.observe(document.documentElement, {
                         childList: true,
-                        subtree: true,
-                        attributes: true,
-                        attributeFilter: ["class", "style", "aria-expanded"]
+                        subtree: true
                     });
 
                     // Google attaches a click action to .ryNqvb/.jCAhz that
@@ -1282,14 +1327,17 @@ class ViewController: NSViewController, WKNavigationDelegate {
                         if (detail || result) {
                             event.preventDefault();
                             event.stopImmediatePropagation();
-                            scheduleCleanup();
+                            scheduleCleanup(40);
                         }
                     };
 
                     document.addEventListener("click", blockResultClick, true);
                     document.addEventListener("dblclick", blockResultClick, true);
-                    document.addEventListener("selectionchange", scheduleCleanup, true);
-                    document.addEventListener("input", scheduleCleanup, true);
+                    document.addEventListener("selectionchange", () => scheduleCleanup(40), true);
+                    // Do not scan Google's complete page on every typed
+                    // character. Pasting remains immediate because its DOM
+                    // update is handled by the child-node observer above.
+                    document.addEventListener("input", () => scheduleCleanup(320), true);
 
                     // Do not let Google install a page-level context menu or
                     // selection callout.  Native text selection and Cmd+C
