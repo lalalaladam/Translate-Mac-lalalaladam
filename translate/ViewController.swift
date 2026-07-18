@@ -1483,7 +1483,9 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         translationLoadAttempt += 1
         let attempt = translationLoadAttempt
 
-        webView.isHidden = false
+        // Google is a background translation service only. Keep its page
+        // hidden while it loads so retries cannot expose its responsive UI.
+        webView.isHidden = true
         isReady = false
         showConnectionOverlay(waitingForNetwork: true)
         webView.load(
@@ -2504,9 +2506,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 // The visible translation workspace is app-owned. Google is
                 // kept only as the background document and direct endpoint,
                 // so its responsive language pages never surface in the UI.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-                    self?.activateCustomTranslationWorkspace()
-                }
+                // Activate the native workspace immediately. The WebView is
+                // hidden before any asynchronous JavaScript work begins, so
+                // no Google frame can appear during startup or reload.
+                self.activateCustomTranslationWorkspace()
                 self.markReady()
                 self.loadTimeoutWorkItem?.cancel()
                 self.automaticRetryWorkItem?.cancel()
@@ -2664,7 +2667,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 self.pendingSourceTextForReload = result as? String ?? ""
                 self.pendingSourceRestoreAttempts = 0
                 self.installUserScripts(on: self.webView.configuration.userContentController)
-                self.webView.isHidden = false
+                // Never expose the Google document during a reload. The
+                // native workspace remains visible while the new language
+                // pair is applied in the background.
+                self.webView.isHidden = true
                 self.isReady = false
 
                 switch destination {
@@ -2767,6 +2773,9 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     }
 
     private func activateCustomTranslationWorkspace() {
+        // Evaluation is asynchronous; hide first so there is no visible
+        // frame of Google's page during startup or a language change.
+        webView.isHidden = true
         webView.evaluateJavaScript("document.querySelector('textarea')?.value || ''") {
             [weak self] result, _ in
             guard let self else { return }
