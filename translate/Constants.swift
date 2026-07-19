@@ -82,7 +82,11 @@ enum ShortcutAction: String, CaseIterable {
         case .stopSpeaking:
             return ShortcutBinding(keyCode: kVK_ANSI_Period, modifiers: [.command], keyEquivalent: ".")
         case .swapLanguages:
-            return ShortcutBinding(keyCode: kVK_ANSI_S, modifiers: [.command], keyEquivalent: "s")
+            return ShortcutBinding(
+                keyCode: kVK_ANSI_S,
+                modifiers: [.command, .shift],
+                keyEquivalent: "s"
+            )
         case .undo:
             return ShortcutBinding(keyCode: kVK_ANSI_Z, modifiers: [.command], keyEquivalent: "z")
         case .redo:
