@@ -757,6 +757,46 @@ private final class WorkspaceIconButton: NSButton {
     }
 }
 
+/// Text swap control with the same mouse-down feedback as the footer icon
+/// buttons. Keeping the feedback inside mouseDown makes it visible before the
+/// language reload starts, instead of being hidden by the action that follows.
+private final class WorkspaceSwapButton: NSButton {
+    init(title: String, target: AnyObject?, action: Selector?) {
+        super.init(frame: .zero)
+        self.title = title
+        self.target = target
+        self.action = action
+        bezelStyle = .inline
+        isBordered = false
+        focusRingType = .none
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.08
+            animator().alphaValue = 0.48
+        }
+        super.mouseDown(with: event)
+        restoreNormalAppearance()
+    }
+
+    func flashForKeyboardShortcut() {
+        alphaValue = 0.48
+        restoreNormalAppearance()
+    }
+
+    private func restoreNormalAppearance() {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.14
+            animator().alphaValue = 1
+        }
+    }
+}
+
 /// Text-only language control.  NSButton's inline style grows a rounded
 /// system background around titles on newer macOS releases, so use a truly
 /// borderless bezel and draw only the language name.
@@ -1090,6 +1130,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var longTextCompletedSourceLanguage = ""
     private var longTextCompletedTargetLanguage = ""
     private var longTextReplacesVisibleTranslation = false
+    // Inserting or removing only line breaks changes paragraph layout, not
+    // the text being translated. Keep the settled result interactive while
+    // Google refreshes the corresponding DOM layout in the background.
+    private var longTextFormattingOnlyRefresh = false
     private var longTextChunks: [String] = []
     private var longTextChunkIndex = 0
     private var longTextSession = 0
@@ -1114,6 +1158,17 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private let longTextTranslationDebounce: TimeInterval = 0.12
     private let longTextPollInterval: TimeInterval = 0.15
     private let longTextResultSettlingInterval: TimeInterval = 0.75
+    // Google Translate Web accepts 5,000 UTF-16 code units. Stay close to
+    // that native limit while retaining a small safety margin for Web UI
+    // changes and characters represented by surrogate pairs.
+    private let googleWebChunkUTF16Limit = 4_800
+    // Google can publish a very short provisional DOM result (for example,
+    // "It") and refine it more than 750 ms later even after typing has
+    // stopped. A one-chunk request is previewed immediately, so keeping its
+    // observer alive a little longer improves correctness without delaying
+    // what the user sees. Multi-chunk work keeps the shorter interval to
+    // avoid adding latency to every chunk.
+    private let singleChunkResultSettlingInterval: TimeInterval = 1.6
     // A completely transparent WKWebView can be deprioritized by WebKit's
     // rendering pipeline. Keep the background translator imperceptibly
     // visible so Google updates its result DOM at normal foreground speed.
@@ -1902,14 +1957,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         )
         sourceLanguageButton.toolTip = interfaceText("选择源语言", "Choose source language")
 
-        let swapButton = NSButton(
+        let swapButton = WorkspaceSwapButton(
             title: "⇄",
             target: self,
             action: #selector(workspaceSwapLanguages)
         )
-        swapButton.bezelStyle = .inline
-        swapButton.isBordered = false
-        swapButton.focusRingType = .none
         swapButton.toolTip = interfaceText("交换源语言和目标语言", "Swap source and target languages")
 
         let targetLanguageButton = WorkspaceLanguageButton(
@@ -3700,6 +3752,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         // stable result for this full source arrives.
         let keepsCompatibleVisibleResult = !longTextCompletedTranslation.isEmpty &&
             longTextCompletedTargetLanguage == targetLanguage.rawValue
+        let formattingOnlyRefresh = keepsCompatibleVisibleResult &&
+            longTextCompletedSourceLanguage == effectiveSourceLanguage.rawValue &&
+            !longTextCompletedSource.isEmpty &&
+            longTextCompletedSource != source &&
+            textRemovingLineBreaks(longTextCompletedSource) == textRemovingLineBreaks(source)
         let chunks = splitLongText(source)
         // Each completed start owns one WebView channel.  A delayed DOM
         // callback from the other preloaded Google page must never complete
@@ -3708,6 +3765,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextSession += 1
         longTextSource = source
         longTextReplacesVisibleTranslation = keepsCompatibleVisibleResult
+        longTextFormattingOnlyRefresh = formattingOnlyRefresh
         longTextTranslation = keepsCompatibleVisibleResult ? longTextCompletedTranslation : ""
         longTextChunks = chunks
         longTextChunkIndex = 0
@@ -3830,7 +3888,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         // own live translator start without an additional Swift debounce.
         // Long input keeps a short debounce because it must be split into a
         // sequence of independent Google Web translations.
-        if source.count <= 2_400 {
+        if source.utf16.count <= googleWebChunkUTF16Limit {
             beginLongTextTranslation(source)
             return
         }
@@ -3857,6 +3915,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextCompletedSourceLanguage = ""
         longTextCompletedTargetLanguage = ""
         longTextReplacesVisibleTranslation = false
+        longTextFormattingOnlyRefresh = false
         longTextChunks = []
         longTextChunkIndex = 0
         longTextPollAttempts = 0
@@ -3910,20 +3969,31 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         updateInlineLongText(source: "", translation: "", status: "")
     }
 
-    // Google accepts roughly 5,000 source characters, but its web result DOM
-    // can duplicate sentence fragments near that limit. Smaller chunks keep
-    // the web result stable while the native view still presents one complete,
-    // continuous source/translation pair to the user.
-    private func splitLongText(_ text: String, limit: Int = 2_400) -> [String] {
+    // Google measures its 5,000-character limit with JavaScript's UTF-16
+    // length. Use the same unit instead of Swift grapheme count so emoji and
+    // supplementary-plane characters can never push a request over the web
+    // limit. At 4,800 units, ordinary input remains on Google's continuous
+    // one-page path until it is genuinely close to the service limit.
+    private func textRemovingLineBreaks(_ text: String) -> String {
+        text.components(separatedBy: .newlines).joined()
+    }
+
+    private func splitLongText(_ text: String) -> [String] {
         var chunks: [String] = []
         var start = text.startIndex
 
         while start < text.endIndex {
-            let maximumEnd = text.index(
-                start,
-                offsetBy: limit,
-                limitedBy: text.endIndex
-            ) ?? text.endIndex
+            var maximumEnd = start
+            var utf16Count = 0
+            while maximumEnd < text.endIndex {
+                let next = text.index(after: maximumEnd)
+                let characterUTF16Count = text[maximumEnd..<next].utf16.count
+                guard utf16Count + characterUTF16Count <= googleWebChunkUTF16Limit else {
+                    break
+                }
+                utf16Count += characterUTF16Count
+                maximumEnd = next
+            }
             if maximumEnd == text.endIndex {
                 chunks.append(String(text[start..<text.endIndex]))
                 break
@@ -3996,6 +4066,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 )
             }
             let status = setLongTextStatus(.completed)
+            longTextFormattingOnlyRefresh = false
             updateInlineLongText(source: nil, translation: longTextTranslation, status: status)
             updateLongTextLabels()
             return
@@ -4006,7 +4077,12 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextWebDeadline = Date().addingTimeInterval(6)
         longTextCandidateTranslation = nil
         longTextCandidateUpdatedAt = nil
-        let status = setLongTextStatus(.translating)
+        // A Return-only edit should behave like Google Translate Web: retain
+        // the completed result and controls while the paragraph boundaries
+        // are refreshed, instead of flashing a new translation cycle.
+        let status = setLongTextStatus(
+            longTextFormattingOnlyRefresh ? .completed : .translating
+        )
         updateInlineLongText(source: nil, translation: longTextTranslation, status: status)
 
         // Keep the WebView hidden, but prefer the same Google Translate Web
@@ -4052,44 +4128,96 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                     // fall back to the generic word nodes when no wrapper is
                     // present. This prevents synonyms from being concatenated
                     // into an ordinary translation.
+                    // Google renders dictionary alternatives in additional
+                    // .QcsUad cards. Restrict extraction to the main result
+                    // card so entries such as “不是” do not become
+                    // “no blame”. Keep all text nodes inside that one card so
+                    // multi-segment sentence and long-text results stay whole.
+                    const resultRoot = document.querySelector(".QcsUad.sMVRZe") ||
+                        document.querySelector(".QcsUad:not(.FkMbO)") ||
+                        document.querySelector(".QcsUad");
                     const resultGroups = [
-                        ".QcsUad .HwtZe",
-                        ".QcsUad [jsname=\"W297wb\"]",
-                        ".QcsUad .jCAhz",
-                        ".QcsUad .lRu31",
-                        ".QcsUad .ryNqvb"
+                        // W297wb/ryNqvb are Google's actual translated text
+                        // nodes. HwtZe is an outer responsive container and
+                        // can also contain a duplicate rendering layer plus
+                        // dictionary details for longer input.
+                        "[jsname=\"W297wb\"]",
+                        ".ryNqvb",
+                        ".jCAhz",
+                        ".lRu31",
+                        ".HwtZe"
                     ];
                     let nodes = [];
                     for (const selector of resultGroups) {
-                        nodes = Array.from(document.querySelectorAll(selector)).filter(visible);
+                        nodes = resultRoot
+                            ? Array.from(resultRoot.querySelectorAll(selector)).filter(visible)
+                            : [];
                         if (nodes.length) break;
                     }
                     const candidates = nodes.filter((element) =>
                         visible(element) &&
                         !element.closest(".UdTY9, .zWhQbb, .mDTU0c")
                     );
-                    const texts = candidates
-                        .filter((element) => !candidates.some((other) =>
+                    const textGroups = [];
+                    const groupIndexByHost = new Map();
+                    for (const element of candidates) {
+                        const text = (element.innerText || element.textContent || "").trim();
+                        if (!text) continue;
+                        // Ignore an outer accessibility/responsive wrapper
+                        // when a descendant exposes the same translated text.
+                        const duplicatesDescendant = candidates.some((other) =>
                             other !== element && element.contains(other) &&
-                            (other.innerText || other.textContent || "").trim() ===
-                            (element.innerText || element.textContent || "").trim()
-                        ))
-                        .map((element) =>
-                            (element.innerText || element.textContent || "").trim()
-                        )
-                        .filter(Boolean);
+                            (other.innerText || other.textContent || "").trim() === text
+                        );
+                        if (duplicatesDescendant) continue;
+                        // Google places all translated sentence nodes for one
+                        // source paragraph in the same HwtZe result block.
+                        // Preserve that block boundary instead of flattening
+                        // every node with a space (which erased a single
+                        // Return), while still joining sentence fragments
+                        // inside the same paragraph naturally.
+                        const host = element.closest(".HwtZe") || element.parentElement;
+                        let groupIndex = groupIndexByHost.get(host);
+                        if (groupIndex === undefined) {
+                            groupIndex = textGroups.length;
+                            groupIndexByHost.set(host, groupIndex);
+                            textGroups.push([]);
+                        }
+                        if (!textGroups[groupIndex].includes(text)) {
+                            textGroups[groupIndex].push(text);
+                        }
+                    }
+                    const texts = textGroups
+                        .map((group, index) => {
+                            const host = Array.from(groupIndexByHost.keys())
+                                .find((candidate) => groupIndexByHost.get(candidate) === index);
+                            // innerText on the concrete translation block is
+                            // the only Google value that retains explicit
+                            // source Returns. This is safe here because `host`
+                            // comes from an already accepted W297wb/ryNqvb
+                            // translation node, not from a global HwtZe scan.
+                            const hostText = host?.matches?.(".HwtZe")
+                                ? (host.innerText || "").trim()
+                                : "";
+                            return hostText || group.join(" ").trim();
+                        })
+                        .filter((text, index, all) => Boolean(text) && all.indexOf(text) === index);
                     const source = document.querySelector("textarea")?.value || "";
                     const trimmedSource = source.trim();
                     const latinWord = /^[A-Za-zÀ-ÖØ-öø-ÿ]+(?:['’\-][A-Za-zÀ-ÖØ-öø-ÿ]+)*$/
                         .test(trimmedSource);
                     const containsCJK = /[\u3400-\u4DBF\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/
                         .test(trimmedSource);
-                    const cjkWord = containsCJK &&
-                        Array.from(trimmedSource).length <= 4 &&
-                        !/[\s,.!?;:，。！？；：]/.test(trimmedSource);
-                    const translation = (latinWord && !containsCJK) || cjkWord
+                    // A single CJK character can safely use Google's primary
+                    // dictionary meaning. Never extend this heuristic to two
+                    // or more characters: short phrases such as “是这样吗”
+                    // and “貌似还行” must retain their complete translation.
+                    const singleCJKCharacter = containsCJK &&
+                        Array.from(trimmedSource).length === 1;
+                    const translation = (latinWord && !containsCJK) ||
+                        singleCJKCharacter
                         ? (texts[0] || "").split(/\s+/).filter(Boolean)[0] || ""
-                        : texts.join(" ");
+                        : texts.join("\n");
                     if (window.__macTranslateWaitForDifferentResult &&
                         translation === window.__macTranslateBlockedTranslation) {
                         return [source, ""];
@@ -4541,6 +4669,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             longTextCompletedSourceLanguage = ""
             longTextCompletedTargetLanguage = ""
             longTextReplacesVisibleTranslation = false
+            longTextFormattingOnlyRefresh = false
             longTextChunks = []
             longTextChunkIndex = 0
             longTextCandidateTranslation = nil
@@ -4885,29 +5014,57 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                     return style.display !== "none" && style.visibility !== "hidden" &&
                         rect.width > 0 && rect.height > 0;
                 };
+                const resultRoot = document.querySelector(".QcsUad.sMVRZe") ||
+                    document.querySelector(".QcsUad:not(.FkMbO)") ||
+                    document.querySelector(".QcsUad");
                 const resultGroups = [
-                    ".QcsUad .HwtZe",
-                    ".QcsUad [jsname=\"W297wb\"]",
-                    ".QcsUad .jCAhz",
-                    ".QcsUad .lRu31",
-                    ".QcsUad .ryNqvb"
+                    "[jsname=\"W297wb\"]",
+                    ".ryNqvb",
+                    ".jCAhz",
+                    ".lRu31",
+                    ".HwtZe"
                 ];
                 let nodes = [];
                 for (const selector of resultGroups) {
-                    nodes = Array.from(document.querySelectorAll(selector)).filter(visible);
+                    nodes = resultRoot
+                        ? Array.from(resultRoot.querySelectorAll(selector)).filter(visible)
+                        : [];
                     if (nodes.length) break;
                 }
                 const candidates = nodes
                     .filter((element) => visible(element) &&
                         !element.closest(".UdTY9, .zWhQbb, .mDTU0c"));
-                const candidateTexts = candidates
-                    .filter((element) => !candidates.some((other) =>
+                const candidateTextGroups = [];
+                const groupIndexByHost = new Map();
+                for (const element of candidates) {
+                    const text = (element.innerText || element.textContent || "").trim();
+                    if (!text) continue;
+                    const duplicatesDescendant = candidates.some((other) =>
                         other !== element && element.contains(other) &&
-                        (other.innerText || other.textContent || "").trim() ===
-                        (element.innerText || element.textContent || "").trim()
-                    ))
-                    .map((element) => (element.innerText || element.textContent || "").trim())
-                    .filter(Boolean);
+                        (other.innerText || other.textContent || "").trim() === text
+                    );
+                    if (duplicatesDescendant) continue;
+                    const host = element.closest(".HwtZe") || element.parentElement;
+                    let groupIndex = groupIndexByHost.get(host);
+                    if (groupIndex === undefined) {
+                        groupIndex = candidateTextGroups.length;
+                        groupIndexByHost.set(host, groupIndex);
+                        candidateTextGroups.push([]);
+                    }
+                    if (!candidateTextGroups[groupIndex].includes(text)) {
+                        candidateTextGroups[groupIndex].push(text);
+                    }
+                }
+                const candidateTexts = candidateTextGroups
+                    .map((group, index) => {
+                        const host = Array.from(groupIndexByHost.keys())
+                            .find((candidate) => groupIndexByHost.get(candidate) === index);
+                        const hostText = host?.matches?.(".HwtZe")
+                            ? (host.innerText || "").trim()
+                            : "";
+                        return hostText || group.join(" ").trim();
+                    })
+                    .filter((text, index, all) => Boolean(text) && all.indexOf(text) === index);
                 const source = document.querySelector("textarea")?.value || "";
                 const trimmedSource = source.trim();
                 // Keep this deliberately compatible with older WebKit
@@ -4920,14 +5077,16 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 // so a full sentence must never be reduced to one token.
                 const containsCJKScript = /[\u3400-\u4DBF\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/
                     .test(trimmedSource);
-                const looksLikeCJKWord = containsCJKScript &&
-                    Array.from(trimmedSource).length <= 4 &&
-                    !/[\s,.!?;:，。！？；：]/.test(trimmedSource);
-                const isSingleWord = (looksLikeLatinStyleWord && !containsCJKScript) ||
-                    looksLikeCJKWord;
+                // Only one CJK character is unambiguously atomic here. Two or
+                // more characters may already form a complete short phrase.
+                const isSingleCJKCharacter = containsCJKScript &&
+                    Array.from(trimmedSource).length === 1;
+                const isSingleWord =
+                    (looksLikeLatinStyleWord && !containsCJKScript) ||
+                    isSingleCJKCharacter;
                 const translation = isSingleWord
                     ? (candidateTexts[0] || "").split(/\s+/).filter(Boolean)[0] || ""
-                    : candidateTexts.join(" ");
+                    : candidateTexts.join("\n");
                 if (window.__macTranslateWaitForDifferentResult &&
                     translation === window.__macTranslateBlockedTranslation) {
                     return [source, ""];
@@ -4986,11 +5145,19 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 return
             }
             self.recordLongTextCandidate(translation)
+            self.previewSingleChunkTranslationIfSafe(
+                translation,
+                session: session,
+                chunkIndex: pollingChunkIndex
+            )
             guard let candidateUpdatedAt = self.longTextCandidateUpdatedAt else {
                 self.scheduleLongTextPoll(session: session)
                 return
             }
-            let remainingQuietTime = self.longTextResultSettlingInterval -
+            let settlingInterval = self.longTextChunks.count == 1
+                ? self.singleChunkResultSettlingInterval
+                : self.longTextResultSettlingInterval
+            let remainingQuietTime = settlingInterval -
                 Date().timeIntervalSince(candidateUpdatedAt)
             guard remainingQuietTime <= 0 else {
                 self.scheduleLongTextPoll(
@@ -5019,6 +5186,38 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextCandidateUpdatedAt = Date()
     }
 
+    /// Match Google Translate's perceived speed without weakening completion
+    /// validation. Google paints an updated DOM result immediately and may
+    /// refine it over the next few mutations. For a one-chunk request we can
+    /// mirror that verified candidate in the native result pane at once while
+    /// keeping the 750 ms quiet-period check before committing the swappable
+    /// translation snapshot. Multi-chunk requests deliberately skip previews
+    /// because a partial chunk cannot safely replace the assembled document.
+    private func previewSingleChunkTranslationIfSafe(
+        _ translation: String,
+        session: Int,
+        chunkIndex: Int
+    ) {
+        guard session == longTextSession,
+              chunkIndex == 0,
+              longTextChunks.count == 1,
+              longTextChunks.indices.contains(chunkIndex),
+              let currentSource = longTextSource,
+              longTextSourceView?.string == currentSource,
+              !translation.isEmpty else { return }
+
+        longTextTranslationView?.string = translation
+        updateInlineLongText(
+            source: nil,
+            translation: translation,
+            status: longTextStatusLabel?.stringValue ?? ""
+        )
+        workspaceTranslationCountLabel?.stringValue =
+            textCountDescription(translation)
+        longTextTranslationLabel?.stringValue =
+            textCountDescription(translation)
+    }
+
     private func scheduleLongTextPoll(
         session: Int,
         delay: TimeInterval? = nil
@@ -5037,6 +5236,14 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
     private func finishLongTextTranslationWithError(session: Int) {
         guard session == longTextSession else { return }
+        if longTextFormattingOnlyRefresh && !longTextCompletedTranslation.isEmpty {
+            longTextFormattingOnlyRefresh = false
+            longTextTranslation = longTextCompletedTranslation
+            let status = setLongTextStatus(.completed)
+            updateInlineLongText(source: nil, translation: longTextTranslation, status: status)
+            updateLongTextLabels()
+            return
+        }
         let status = setLongTextStatus(.failed)
         updateInlineLongText(source: nil, translation: longTextTranslation, status: status)
         updateLongTextLabels()
@@ -5054,6 +5261,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextCompletedSourceLanguage = ""
         longTextCompletedTargetLanguage = ""
         longTextReplacesVisibleTranslation = false
+        longTextFormattingOnlyRefresh = false
         longTextChunks = []
         longTextChunkIndex = 0
         setLongTextStatus(.idle)
@@ -5454,6 +5662,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     }
 
     public func swapLanguages() {
+        (workspaceSwapButton as? WorkspaceSwapButton)?.flashForKeyboardShortcut()
         swapCurrentTranslationLanguages()
     }
 
@@ -5602,13 +5811,21 @@ extension ViewController: WKScriptMessageHandler {
                     return
                 }
 
-                // This is only a candidate.  Keep the observer alive and
-                // require the Google result DOM to remain unchanged for the
-                // same quiet interval used by polling before displaying it.
+                // This is only a candidate. Preview a source-verified
+                // one-chunk result immediately, but keep the observer alive
+                // and require the normal quiet interval before committing it
+                // as the final, swappable translation.
                 recordLongTextCandidate(translation)
+                previewSingleChunkTranslationIfSafe(
+                    translation,
+                    session: observedSession,
+                    chunkIndex: observedChunkIndex
+                )
                 scheduleLongTextPoll(
                     session: observedSession,
-                    delay: longTextResultSettlingInterval
+                    delay: longTextChunks.count == 1
+                        ? singleChunkResultSettlingInterval
+                        : longTextResultSettlingInterval
                 )
                 return
             }
