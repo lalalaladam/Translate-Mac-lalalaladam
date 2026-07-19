@@ -4035,35 +4035,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             (() => {
                 const textarea = document.querySelector("textarea");
                 if (!textarea) return false;
-                const resultSelectors = [
-                    ".QcsUad .ryNqvb",
-                    ".QcsUad .HwtZe",
-                    ".QcsUad .jCAhz",
-                    ".QcsUad .lRu31",
-                    ".QcsUad [jsname=\"W297wb\"]"
-                ].join(",");
                 const value = new TextDecoder().decode(
                     Uint8Array.from(atob("\#(encoded)"), (character) =>
                         character.charCodeAt(0))
                 );
                 const inputAlreadyCurrent = textarea.value === value;
-                // Snapshot the old result before changing the input. Google
-                // can leave that DOM node visible while the new translation
-                // is being generated.
-                if (!inputAlreadyCurrent) {
-                    const oldTexts = Array.from(
-                        document.querySelectorAll(resultSelectors)
-                    ).map((element) =>
-                        (element.innerText || element.textContent || "").trim()
-                    ).filter(Boolean);
-                    const oldSource = (textarea.value || "").trim();
-                    const oldIsSingleWord = /^[A-Za-zÀ-ÖØ-öø-ÿ]+(?:['’\-][A-Za-zÀ-ÖØ-öø-ÿ]+)*$/
-                        .test(oldSource);
-                    window.__macTranslateBlockedTranslation = oldIsSingleWord
-                        ? (oldTexts[0] || "").split(/\s+/).filter(Boolean)[0] || ""
-                        : oldTexts.join(" ");
-                    window.__macTranslateWaitForDifferentResult = true;
-                }
                 window.__macTranslateReadCurrentResult = () => {
                     const visible = (element) => {
                         const style = getComputedStyle(element);
@@ -4123,6 +4099,18 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                     }
                     return [source, translation];
                 };
+                // Snapshot the old result with the exact same parser used for
+                // the eventual result.  The earlier implementation collected
+                // every matching selector here but used only the first
+                // preferred result group later. Those two strings could
+                // differ, allowing the still-visible old translation through.
+                if (!inputAlreadyCurrent) {
+                    window.__macTranslateWaitForDifferentResult = false;
+                    const previousPayload = window.__macTranslateReadCurrentResult();
+                    window.__macTranslateBlockedTranslation = previousPayload?.[1] || "";
+                    window.__macTranslateWaitForDifferentResult =
+                        Boolean(window.__macTranslateBlockedTranslation);
+                }
                 window.__macTranslateResultObserver?.disconnect();
                 clearTimeout(window.__macTranslateResultNotificationTimer);
                 const notifyResultChanged = (records) => {
@@ -4143,11 +4131,13 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                     if (!touchesResult) return;
                     clearTimeout(window.__macTranslateResultNotificationTimer);
                     window.__macTranslateResultNotificationTimer = setTimeout(() => {
-                        // A result-DOM mutation proves Google has processed
-                        // the new source. The resulting text may legitimately
-                        // equal the previous translation, so stop treating an
-                        // identical value as stale once this event arrives.
-                        window.__macTranslateWaitForDifferentResult = false;
+                        // Mutations inside Google's translation card are not
+                        // proof that the result belongs to the new source: the
+                        // input replacement itself also mutates this subtree.
+                        // Keep blocking the baseline until the parsed result
+                        // really changes. If the correct new translation is
+                        // legitimately identical, the current request's API
+                        // fallback will resolve it without exposing stale DOM.
                         const payload = window.__macTranslateReadCurrentResult?.();
                         if (!payload || !payload[1]) return;
                         window.webkit.messageHandlers.callbackHandler.postMessage({
@@ -4255,7 +4245,14 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         session: Int,
         source: String
     ) {
-        guard session == longTextSession else { return }
+        guard session == longTextSession,
+              let currentSource = longTextSource,
+              longTextSourceView?.string == currentSource else {
+            translationPipelineLogger.info(
+                "Discarded result whose source no longer matches the native editor"
+            )
+            return
+        }
         if longTextReplacesVisibleTranslation && longTextChunkIndex == 0 {
             longTextTranslation = translation
             longTextReplacesVisibleTranslation = false
