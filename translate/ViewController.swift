@@ -44,12 +44,56 @@ private enum PronunciationService {
         language: TranslateLanguage,
         completion: @escaping (PronunciationResult?) -> Void
     ) {
-        guard language == .english,
-              let encodedWord = word.addingPercentEncoding(
-                  withAllowedCharacters: .urlPathAllowed
-              ),
-              let url = URL(string: "\(dictionaryAPIBaseURL)\(encodedWord)") else {
+        guard language == .english else {
             DispatchQueue.main.async { completion(nil) }
+            return
+        }
+
+        let candidates = pronunciationLookupCandidates(for: word)
+        fetchStandardCandidate(
+            candidates,
+            index: 0,
+            originalWord: word,
+            completion: completion
+        )
+    }
+
+    private static func fetchStandardCandidate(
+        _ candidates: [String],
+        index: Int,
+        originalWord: String,
+        completion: @escaping (PronunciationResult?) -> Void
+    ) {
+        guard candidates.indices.contains(index) else {
+            // Use the entered word for web/AI fallback. Derived candidates are
+            // only for locating a standard dictionary headword.
+            fetchFromGoogleSearch(word: originalWord, completion: completion)
+            return
+        }
+
+        fetchStandardPronunciation(for: candidates[index]) { result in
+            if let result {
+                completion(result)
+                return
+            }
+            fetchStandardCandidate(
+                candidates,
+                index: index + 1,
+                originalWord: originalWord,
+                completion: completion
+            )
+        }
+    }
+
+    private static func fetchStandardPronunciation(
+        for word: String,
+        completion: @escaping (PronunciationResult?) -> Void
+    ) {
+        guard let encodedWord = word.addingPercentEncoding(
+            withAllowedCharacters: .urlPathAllowed
+        ),
+        let url = URL(string: "\(dictionaryAPIBaseURL)\(encodedWord)") else {
+            fetchFromOxford(word: word, completion: completion)
             return
         }
 
@@ -168,13 +212,105 @@ private enum PronunciationService {
                   (response as? HTTPURLResponse).map({ 200..<300 ~= $0.statusCode }) == true,
                   let wikitext = wikitext(from: data),
                   let pronunciation = pronunciationFromEnglishWikitext(wikitext) else {
-                fetchFromGoogleSearch(word: word, completion: completion)
+                DispatchQueue.main.async { completion(nil) }
                 return
             }
             DispatchQueue.main.async {
                 completion(PronunciationResult(ipa: pronunciation, source: .standard))
             }
         }.resume()
+    }
+
+    /// Returns the entered word first, followed by conservative English word
+    /// forms that commonly point to the same dictionary headword. This keeps
+    /// standard IPA available for inflections such as "running", "studies",
+    /// "walked", and ordinary plurals before the app falls back to an estimate.
+    private static func pronunciationLookupCandidates(for word: String) -> [String] {
+        let normalized = word
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard normalized.count >= 3,
+              normalized.unicodeScalars.allSatisfy({
+                  (97...122).contains($0.value)
+              }) else {
+            return [normalized]
+        }
+
+        var candidates = [normalized]
+        func add(_ candidate: String) {
+            guard candidate.count >= 2,
+                  candidate != normalized,
+                  candidate.unicodeScalars.allSatisfy({
+                      (97...122).contains($0.value)
+                  }),
+                  !candidates.contains(candidate) else {
+                return
+            }
+            candidates.append(candidate)
+        }
+
+        if normalized.hasSuffix("'s") {
+            add(String(normalized.dropLast(2)))
+        } else if normalized.hasSuffix("s'") {
+            add(String(normalized.dropLast()))
+        }
+
+        if normalized.hasSuffix("ies"), normalized.count > 4 {
+            add(String(normalized.dropLast(3)) + "y")
+        }
+        if normalized.hasSuffix("ves"), normalized.count > 4 {
+            let stem = String(normalized.dropLast(3))
+            add(stem + "f")
+            add(stem + "fe")
+        }
+        if normalized.hasSuffix("es"), normalized.count > 4 {
+            add(String(normalized.dropLast(2)))
+            add(String(normalized.dropLast()))
+        }
+        if normalized.hasSuffix("s"), normalized.count > 3 {
+            add(String(normalized.dropLast()))
+        }
+
+        if normalized.hasSuffix("ied"), normalized.count > 4 {
+            add(String(normalized.dropLast(3)) + "y")
+        }
+        if normalized.hasSuffix("ed"), normalized.count > 4 {
+            let stem = String(normalized.dropLast(2))
+            add(stem)
+            add(stem + "e")
+            add(removeDoubledFinalConsonant(from: stem))
+        } else if normalized.hasSuffix("d"), normalized.count > 3 {
+            add(String(normalized.dropLast()))
+        }
+
+        if normalized.hasSuffix("ing"), normalized.count > 5 {
+            let stem = String(normalized.dropLast(3))
+            add(stem)
+            add(stem + "e")
+            add(removeDoubledFinalConsonant(from: stem))
+        }
+
+        if normalized.hasSuffix("est"), normalized.count > 5 {
+            let stem = String(normalized.dropLast(3))
+            add(stem)
+            add(stem + "e")
+        } else if normalized.hasSuffix("er"), normalized.count > 4 {
+            let stem = String(normalized.dropLast(2))
+            add(stem)
+            add(stem + "e")
+        }
+
+        return candidates
+    }
+
+    private static func removeDoubledFinalConsonant(from word: String) -> String {
+        let characters = Array(word)
+        guard characters.count >= 2,
+              characters[characters.count - 1] == characters[characters.count - 2],
+              !"aeiou".contains(characters[characters.count - 1]) else {
+            return word
+        }
+        return String(characters.dropLast())
     }
 
     private static func wikitext(from data: Data) -> String? {
