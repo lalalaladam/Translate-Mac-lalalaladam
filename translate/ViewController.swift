@@ -1060,7 +1060,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var readyHandlers: [() -> Void] = []
 
     var webView: WebView!
-    private var automaticTranslationWebView: WKWebView!
+    private var automaticTranslationWebView: BackgroundTranslationWebView!
     private weak var activeTranslationWebView: WKWebView?
     private var automaticTranslationWebViewReady = false
     private var automaticTranslationTarget = TranslateLanguagePreferences.target
@@ -1082,6 +1082,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var connectionSpinner: NSProgressIndicator?
     private var connectionRetryButton: NSButton?
     private var loadTimeoutWorkItem: DispatchWorkItem?
+    private var delayedConnectionOverlayWorkItem: DispatchWorkItem?
     private var automaticRetryWorkItem: DispatchWorkItem?
     private var translationLoadAttempt = 0
     // The workspace is intentionally a transparent content layer. The main
@@ -1642,7 +1643,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         // language, adding several seconds before any result could appear.
         let automaticConfig = WKWebViewConfiguration()
         automaticConfig.userContentController.add(self, name: "callbackHandler")
-        automaticTranslationWebView = WKWebView(
+        automaticTranslationWebView = BackgroundTranslationWebView(
             frame: webView.frame,
             configuration: automaticConfig
         )
@@ -1695,6 +1696,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         installWindowBehaviorBar()
         installConnectionOverlay()
         installLongTextOverlay()
+        // Present the app-owned empty editor immediately. A cold WebKit load
+        // continues in the background and should not make a healthy launch
+        // look like a multi-second network check.
+        longTextOverlay?.isHidden = false
+        refreshWorkspaceLanguageTitles()
 
         (view as? AppearanceObservingView)?.effectiveAppearanceDidChange = {
             [weak self] in
@@ -1777,6 +1783,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
     deinit {
         loadTimeoutWorkItem?.cancel()
+        delayedConnectionOverlayWorkItem?.cancel()
         automaticRetryWorkItem?.cancel()
         longTextDebounceWorkItem?.cancel()
         stopSpeaking()
@@ -1943,7 +1950,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         connectionDetailLabel = detail
         connectionSpinner = spinner
         connectionRetryButton = retryButton
-        showConnectionOverlay(waitingForNetwork: true)
+        hideConnectionOverlay()
     }
 
     private func installLongTextOverlay() {
@@ -2356,8 +2363,24 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     }
 
     private func hideConnectionOverlay() {
+        delayedConnectionOverlayWorkItem?.cancel()
+        delayedConnectionOverlayWorkItem = nil
         connectionOverlay?.isHidden = true
         connectionSpinner?.stopAnimation(nil)
+    }
+
+    private func scheduleConnectionOverlayIfStillLoading(attempt: Int) {
+        delayedConnectionOverlayWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.translationLoadAttempt == attempt,
+                  !self.isReady else { return }
+            self.showConnectionOverlay(waitingForNetwork: true)
+        }
+        delayedConnectionOverlayWorkItem = workItem
+        // Avoid flashing a connection screen during an ordinary cold launch.
+        // It remains available for genuinely slow or unavailable networks.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: workItem)
     }
 
     private func loadTranslationService() {
@@ -2372,11 +2395,12 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         webView.isHidden = false
         webView.alphaValue = backgroundTranslationWebViewAlpha
         isReady = false
-        showConnectionOverlay(waitingForNetwork: true)
+        hideConnectionOverlay()
+        scheduleConnectionOverlayIfStillLoading(attempt: attempt)
         webView.load(
             URLRequest(
                 url: defaultTranslationURL(),
-                cachePolicy: .reloadIgnoringLocalCacheData,
+                cachePolicy: .returnCacheDataElseLoad,
                 timeoutInterval: 15
             )
         )
@@ -2399,6 +2423,8 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
     private func handleTranslationLoadFailure() {
         guard !isReady else { return }
+        delayedConnectionOverlayWorkItem?.cancel()
+        delayedConnectionOverlayWorkItem = nil
         loadTimeoutWorkItem?.cancel()
         showConnectionOverlay(waitingForNetwork: false)
         scheduleAutomaticRetry()
@@ -3835,6 +3861,22 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             return
         }
 
+        // Reassigning an NSTextView that is already first responder interrupts
+        // marked text owned by Chinese/Japanese input methods. An existing
+        // responder needs no restoration at all.
+        if window.firstResponder === sourceView {
+            restoreSourceFocusAfterLanguageSwap = false
+            return
+        }
+
+        // Never change responders while an IME composition is active.
+        if sourceView.hasMarkedText() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.restoreSourceFocusAfterLanguageSwapIfNeeded(attempt: attempt)
+            }
+            return
+        }
+
         if window.makeFirstResponder(sourceView) {
             restoreSourceFocusAfterLanguageSwap = false
             return
@@ -4650,6 +4692,23 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         let source = currentSourceLanguage
         currentSourceLanguage = currentTargetLanguage
         currentTargetLanguage = source
+
+        // With two empty panes there is no text snapshot to preserve. Treat
+        // the language pair as native editor state only. In particular, do
+        // not navigate either hidden Google page and do not touch the first
+        // responder here: an asynchronous WebKit navigation can finish while
+        // a Chinese/Japanese input method owns marked text and truncate that
+        // composition. The first committed source edit will prepare the
+        // matching background translation page without disturbing AppKit's
+        // editor lifecycle.
+        let panesAreEmpty = longTextSourceView?.string
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+            longTextTranslationView?.string
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+        if panesAreEmpty {
+            refreshWorkspaceLanguageTitles()
+            return
+        }
 
         if let swappedSource = completedTranslation {
             // Cancel every old result callback before loading the reversed

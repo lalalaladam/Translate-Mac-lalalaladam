@@ -29,7 +29,20 @@ final class WindowBehaviorBarView: NSVisualEffectView {
     // look like a selectable web control rather than a normal window surface.
 }
 
-class WebView: WKWebView {
+// Google Translate is used as a background translation engine. The app-owned
+// NSTextView is the only editor, so a background navigation must never enter
+// AppKit's responder chain and compete with an input method's marked text.
+// This mirrors the separation used by mature native editors: service views
+// process state, while one stable native text client owns keyboard input.
+class BackgroundTranslationWebView: WKWebView {
+    override var acceptsFirstResponder: Bool { false }
+
+    override func becomeFirstResponder() -> Bool {
+        false
+    }
+}
+
+class WebView: BackgroundTranslationWebView {
     // The view controller performs page-specific actions such as selecting
     // source text or pressing Google's listen button. Keeping the mapping in
     // native code makes the user-configurable shortcuts work independently of
