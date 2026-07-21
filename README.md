@@ -6,7 +6,7 @@ A native macOS translation workspace with a glass interface, multilingual suppor
 
 The first standalone release is Translate v1.0.0. Releases will be published at [Translate-Mac-lalalaladam](https://github.com/lalalaladam/Translate-Mac-lalalaladam/releases).
 
-![Translate promotional screenshot](media/translate-1.0.0-promo.png)
+![Translate promotional screenshot](media/translate-1.0.0-promo.jpg)
 
 The interface includes the native macOS **Translate** (`翻译`), **Default Languages** (`默认语言`), and **Interface Language** (`界面语言`) menus, centered language controls, glass surfaces, and the optional window-behavior bar.
 

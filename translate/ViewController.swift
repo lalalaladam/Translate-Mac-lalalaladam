@@ -1067,6 +1067,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var pendingAutomaticTranslationSource: String?
     private var pendingAutomaticTranslationSession: Int?
     var visualEffect: NSVisualEffectView!
+    private var workspaceBackgroundView: NSVisualEffectView?
     private var keepOnTopButton: NSButton!
     private var showOnAllSpacesButton: NSButton!
     private var windowBehaviorBar: WindowBehaviorBarView?
@@ -1182,9 +1183,13 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var currentSourceLanguage = TranslateLanguagePreferences.source
     private var currentTargetLanguage = TranslateLanguagePreferences.target
 
+    private var currentEffectiveAppearance: NSAppearance {
+        guard isViewLoaded else { return NSApp.effectiveAppearance }
+        return view.window?.effectiveAppearance ?? view.effectiveAppearance
+    }
+
     var isDarkMode: Bool {
-        let appearance = NSApp.effectiveAppearance
-        return appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        currentEffectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
 
     public func whenReady(_ handler: @escaping () -> Void) {
@@ -1693,6 +1698,20 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
         self.view.addSubview(visualEffect, positioned: .below, relativeTo: nil)
 
+        // Google Translate stays mounted at a very low alpha so WebKit keeps
+        // its dynamic result DOM active. Put a dedicated behind-window glass
+        // surface above both service WebViews: it samples only content behind
+        // the app window, never the lower sibling WebViews inside the window.
+        // This preserves translucency without allowing Google's page through.
+        let workspaceBackground = NSVisualEffectView(frame: self.view.bounds)
+        workspaceBackground.autoresizingMask = [.width, .height]
+        workspaceBackground.material = isDarkMode ? .dark : .light
+        workspaceBackground.blendingMode = .behindWindow
+        workspaceBackground.state = .active
+        workspaceBackground.isEmphasized = false
+        self.view.addSubview(workspaceBackground, positioned: .above, relativeTo: webView)
+        workspaceBackgroundView = workspaceBackground
+
         installWindowBehaviorBar()
         installConnectionOverlay()
         installLongTextOverlay()
@@ -1799,7 +1818,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 height: barHeight
             )
         )
-        bar.blendingMode = .behindWindow
+        bar.blendingMode = .withinWindow
         bar.state = .active
         bar.autoresizingMask = [.width, .maxYMargin]
         bar.wantsLayer = true
@@ -1930,7 +1949,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         overlay.addSubview(stack)
-        view.addSubview(overlay, positioned: .above, relativeTo: webView)
+        view.addSubview(
+            overlay,
+            positioned: .above,
+            relativeTo: workspaceBackgroundView ?? webView
+        )
         NSLayoutConstraint.activate([
             overlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -2135,7 +2158,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
         overlay.addSubview(header)
         overlay.addSubview(splitView)
-        view.addSubview(overlay, positioned: .above, relativeTo: webView)
+        view.addSubview(
+            overlay,
+            positioned: .above,
+            relativeTo: workspaceBackgroundView ?? webView
+        )
         NSLayoutConstraint.activate([
             overlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -3471,9 +3498,18 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     }
 
     func setTheme(completion: (() -> Void)? = nil) {
-        visualEffect.material = isDarkMode ? .dark : .light
+        let appearance = currentEffectiveAppearance
+        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        visualEffect.material = dark ? .dark : .light
+        workspaceBackgroundView?.material = dark ? .dark : .light
         updateWindowBehaviorBarAppearance()
         updateLongTextOverlayAppearance()
+        let webColorScheme = dark ? "dark" : "light"
+        let webTextColor = dark ? "white" : "black"
+        let webSelectedColor = dark ? "#A8C7FA" : "#0B57D0"
+        let webSelectedBackground = dark
+            ? "rgba(168, 199, 250, 0.20)"
+            : "rgba(11, 87, 208, 0.14)"
         let selectedLanguageStyle = TranslateFeaturePreferences.highlightSelectedLanguage
             ? #"""
                 [role="tab"][data-language-code][aria-selected="true"] {
@@ -3500,18 +3536,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             }
             theme.textContent = `
                 :root {
-                    color-scheme: light dark !important;
-                    --translate-text-color: black;
-                    --translate-selected-color: #0B57D0;
-                    --translate-selected-background: rgba(11, 87, 208, 0.14);
-                }
-
-                @media (prefers-color-scheme: dark) {
-                    :root {
-                        --translate-text-color: white;
-                        --translate-selected-color: #A8C7FA;
-                        --translate-selected-background: rgba(168, 199, 250, 0.20);
-                    }
+                    color-scheme: \#(webColorScheme) !important;
+                    --translate-text-color: \#(webTextColor);
+                    --translate-selected-color: \#(webSelectedColor);
+                    --translate-selected-background: \#(webSelectedBackground);
                 }
 
                 *, *:before, *:after {
