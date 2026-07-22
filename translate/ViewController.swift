@@ -18,12 +18,52 @@ private let translationPipelineLogger = Logger(
 /// string directly keeps very large pastes on the standard NSTextView path.
 private final class TranslationSourceTextView: NSTextView {
     override func paste(_ sender: Any?) {
-        if let text = NSPasteboard.general.string(forType: .string) {
+        if let text = PlainTextPasteboardReader.read(from: .general) {
             insertText(text, replacementRange: selectedRange())
             return
         }
         super.paste(sender)
     }
+}
+
+private enum PlainTextPasteboardReader {
+    static func read(from pasteboard: NSPasteboard) -> String? {
+        // Word, Pages and browsers normally publish a faithful public.utf8-plain-text
+        // representation. Prefer it so HTML/RTF styling and embedded objects never
+        // reach Google Translate.
+        if let plain = pasteboard.string(forType: .string) {
+            return minimallySanitized(plain)
+        }
+
+        // Some producers expose only attributed data. AppKit converts that data to
+        // visible text while preserving paragraph breaks and tabs.
+        for type in [NSPasteboard.PasteboardType.rtf, .rtfd, .html] {
+            guard let data = pasteboard.data(forType: type),
+                  let attributed = try? NSAttributedString(
+                    data: data,
+                    options: [:],
+                    documentAttributes: nil
+                  ) else { continue }
+            return minimallySanitized(attributed.string)
+        }
+        return nil
+    }
+
+    private static func minimallySanitized(_ text: String) -> String {
+        // U+FFFC represents an attachment rather than visible text. NUL cannot be
+        // displayed by NSTextView/HTMLTextAreaElement. Preserve every whitespace,
+        // line separator, tab and all other Unicode content byte-for-byte.
+        text.unicodeScalars.reduce(into: "") { result, scalar in
+            if scalar.value != 0 && scalar.value != 0xFFFC {
+                result.unicodeScalars.append(scalar)
+            }
+        }
+    }
+}
+
+private struct TranslationChunk {
+    let text: String
+    let separatorAfter: String
 }
 
 private enum PronunciationSource {
@@ -1136,8 +1176,9 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     // the text being translated. Keep the settled result interactive while
     // Google refreshes the corresponding DOM layout in the background.
     private var longTextFormattingOnlyRefresh = false
-    private var longTextChunks: [String] = []
+    private var longTextChunks: [TranslationChunk] = []
     private var longTextChunkIndex = 0
+    private var longTextChunkRetryCount = 0
     private var longTextSession = 0
     private var longTextPollAttempts = 0
     private var longTextLastWebTranslation: String?
@@ -4048,8 +4089,8 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         text.components(separatedBy: .newlines).joined()
     }
 
-    private func splitLongText(_ text: String) -> [String] {
-        var chunks: [String] = []
+    private func splitLongText(_ text: String) -> [TranslationChunk] {
+        var chunks: [TranslationChunk] = []
         var start = text.startIndex
 
         while start < text.endIndex {
@@ -4065,7 +4106,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 maximumEnd = next
             }
             if maximumEnd == text.endIndex {
-                chunks.append(String(text[start..<text.endIndex]))
+                chunks.append(TranslationChunk(
+                    text: String(text[start..<text.endIndex]),
+                    separatorAfter: ""
+                ))
                 break
             }
 
@@ -4094,15 +4138,37 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
             if let preferredBreak {
                 let next = text.index(after: preferredBreak)
-                chunks.append(String(text[start..<next]))
+                let boundary = text[preferredBreak..<next]
+                let isWhitespace = boundary.unicodeScalars.allSatisfy {
+                    CharacterSet.whitespacesAndNewlines.contains($0)
+                }
+                var separatorStart = preferredBreak
+                if isWhitespace {
+                    while separatorStart > start {
+                        let previous = text.index(before: separatorStart)
+                        guard text[previous].unicodeScalars.allSatisfy({
+                            CharacterSet.whitespacesAndNewlines.contains($0)
+                        }) else { break }
+                        separatorStart = previous
+                    }
+                }
+                chunks.append(TranslationChunk(
+                    text: String(text[start..<(isWhitespace ? separatorStart : next)]),
+                    separatorAfter: isWhitespace
+                        ? String(text[separatorStart..<next])
+                        : ""
+                ))
                 start = next
             } else {
-                chunks.append(String(text[start..<maximumEnd]))
+                chunks.append(TranslationChunk(
+                    text: String(text[start..<maximumEnd]),
+                    separatorAfter: ""
+                ))
                 start = maximumEnd
             }
         }
 
-        return chunks.filter { !$0.isEmpty }
+        return chunks.filter { !$0.text.isEmpty || !$0.separatorAfter.isEmpty }
     }
 
     private func translateNextLongTextChunk(session: Int) {
@@ -4142,8 +4208,16 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             return
         }
 
-        let chunk = longTextChunks[longTextChunkIndex]
+        let chunk = longTextChunks[longTextChunkIndex].text
+        if chunk.isEmpty {
+            longTextTranslation.append(longTextChunks[longTextChunkIndex].separatorAfter)
+            longTextTranslationView?.string = longTextTranslation
+            longTextChunkIndex += 1
+            translateNextLongTextChunk(session: session)
+            return
+        }
         longTextPollAttempts = 0
+        longTextChunkRetryCount = 0
         longTextWebDeadline = Date().addingTimeInterval(6)
         longTextCandidateTranslation = nil
         longTextCandidateUpdatedAt = nil
@@ -4426,6 +4500,17 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             DispatchQueue.main.async {
                 guard let self, session == self.longTextSession else { return }
                 guard succeeded, let translation else {
+                    if self.longTextChunkRetryCount == 0 {
+                        self.longTextChunkRetryCount = 1
+                        translationPipelineLogger.error(
+                            "Translation chunk failed; performing the single permitted retry: chunkIndex=\(self.longTextChunkIndex, privacy: .public), error=\(String(describing: error), privacy: .public)"
+                        )
+                        self.translateLongTextChunkUsingAPI(chunk, session: session)
+                        return
+                    }
+                    translationPipelineLogger.error(
+                        "Translation chunk failed after retry: chunkIndex=\(self.longTextChunkIndex, privacy: .public), status=\((response as? HTTPURLResponse)?.statusCode ?? -1, privacy: .public), error=\(String(describing: error), privacy: .public)"
+                    )
                     self.finishLongTextTranslationWithError(session: session)
                     return
                 }
@@ -4451,14 +4536,13 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             )
             return
         }
+        let separator = longTextChunks[longTextChunkIndex].separatorAfter
         if longTextReplacesVisibleTranslation && longTextChunkIndex == 0 {
-            longTextTranslation = translation
+            longTextTranslation = translation + separator
             longTextReplacesVisibleTranslation = false
         } else {
-            if !longTextTranslation.isEmpty {
-                longTextTranslation.append("\n\n")
-            }
             longTextTranslation.append(translation)
+            longTextTranslation.append(separator)
         }
         longTextWebDeadline = nil
         longTextTranslationView?.string = longTextTranslation
@@ -5071,7 +5155,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextScheduledPoll = nil
         longTextPollAttempts += 1
         guard longTextWebDeadline.map({ Date() <= $0 }) ?? false else {
-            let chunk = longTextChunks[longTextChunkIndex]
+            let chunk = longTextChunks[longTextChunkIndex].text
             translateLongTextChunkUsingAPI(chunk, session: session)
             return
         }
@@ -5080,7 +5164,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         guard let serviceWebView = activeTranslationWebView else {
             longTextPollInFlightSession = nil
             translateLongTextChunkUsingAPI(
-                longTextChunks[longTextChunkIndex],
+                longTextChunks[longTextChunkIndex].text,
                 session: session
             )
             return
@@ -5198,7 +5282,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             let payload = result as? [Any]
             let observedSource = (payload?.first as? String ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let expectedSource = self.longTextChunks[self.longTextChunkIndex]
+            let expectedSource = self.longTextChunks[self.longTextChunkIndex].text
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let translation = (payload?.dropFirst().first as? String ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5545,8 +5629,8 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 : interfaceText("翻译完成", "Translation complete")
         case .failed:
             return interfaceText(
-                "部分内容未能完成翻译；请检查网络后重试。",
-                "Some content could not be translated. Check the network and try again."
+                "部分内容未能完成翻译；请重试。",
+                "Some content could not be translated. Please try again."
             )
         }
     }
@@ -5883,7 +5967,7 @@ extension ViewController: WKScriptMessageHandler {
                longTextChunks.indices.contains(observedChunkIndex),
                let observedSource = payload["source"] as? String,
                let observedTranslation = payload["translation"] as? String {
-                let expectedSource = longTextChunks[observedChunkIndex]
+                let expectedSource = longTextChunks[observedChunkIndex].text
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let source = observedSource
                     .trimmingCharacters(in: .whitespacesAndNewlines)
