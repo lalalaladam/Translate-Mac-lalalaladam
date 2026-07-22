@@ -23,6 +23,19 @@ private let inputMethodTimingLogger = Logger(
     category: "InputMethodTiming"
 )
 
+#if DEBUG
+private func logTextPipelineSnapshot(_ stage: String, _ text: String?) {
+    let value = text ?? "<nil>"
+    let preview = String(value.prefix(4_000))
+    let containsSup = value.localizedCaseInsensitiveContains("<sup")
+    translationPipelineLogger.info(
+        "TextSnapshot stage=\(stage, privacy: .public) chars=\(value.count, privacy: .public) containsSup=\(containsSup, privacy: .public) text=\(String(reflecting: preview), privacy: .public)"
+    )
+}
+#else
+private func logTextPipelineSnapshot(_ stage: String, _ text: String?) {}
+#endif
+
 /// A deliberately plain-text editor for the app-owned source pane.  It does
 /// not depend on WebKit's 5,000-character field, and inserting the pasteboard
 /// string directly keeps very large pastes on the standard NSTextView path.
@@ -37,7 +50,12 @@ private final class TranslationSourceTextView: NSTextView {
 
     override func paste(_ sender: Any?) {
         hasPendingImmediatePaste = true
+        logTextPipelineSnapshot(
+            "1-nspasteboard-raw-string",
+            NSPasteboard.general.string(forType: .string)
+        )
         if let text = PlainTextPasteboardReader.read(from: .general) {
+            logTextPipelineSnapshot("2-plain-text-reader-output", text)
             insertText(text, replacementRange: selectedRange())
             return
         }
@@ -45,27 +63,103 @@ private final class TranslationSourceTextView: NSTextView {
     }
 }
 
+private enum TranslationServiceTextNormalizer {
+    private static let citationSuperscriptExpression = try? NSRegularExpression(
+        pattern: #"(?i)<sup(?:\s+[^<>]*)?>([0-9\s,;\-–—]+)</sup\s*>"#
+    )
+
+    static func normalize(_ translation: String, forSource source: String) -> String {
+        // Google Translate's result DOM can expose citation superscripts as
+        // literal markup even though its textarea received ordinary numbers.
+        // Preserve intentional HTML/code by making this correction only when
+        // the submitted source did not itself contain a sup tag.
+        guard source.range(of: "<sup", options: .caseInsensitive) == nil,
+              let expression = citationSuperscriptExpression else {
+            return translation
+        }
+        let range = NSRange(translation.startIndex..., in: translation)
+        return expression.stringByReplacingMatches(
+            in: translation,
+            range: range,
+            withTemplate: "$1"
+        )
+    }
+}
+
 private enum PlainTextPasteboardReader {
+    private static let serializedSuperscriptExpression = try? NSRegularExpression(
+        pattern: #"(?i)<sup(?:\s+[^<>]*)?>([0-9\s,;\-–—]+)</sup\s*>"#
+    )
+
     static func read(from pasteboard: NSPasteboard) -> String? {
         // Word, Pages and browsers normally publish a faithful public.utf8-plain-text
         // representation. Prefer it so HTML/RTF styling and embedded objects never
         // reach Google Translate.
         if let plain = pasteboard.string(forType: .string) {
-            return minimallySanitized(plain)
+            let sanitized = minimallySanitized(plain)
+            guard containsSerializedSuperscript(in: sanitized) else {
+                return sanitized
+            }
+            return textByUnwrappingSerializedSuperscripts(
+                in: sanitized,
+                whenConfirmedBy: attributedStrings(from: pasteboard)
+            )
         }
 
         // Some producers expose only attributed data. AppKit converts that data to
         // visible text while preserving paragraph breaks and tabs.
-        for type in [NSPasteboard.PasteboardType.rtf, .rtfd, .html] {
+        if let attributed = attributedStrings(from: pasteboard).first {
+            return attributed
+        }
+        return nil
+    }
+
+    private static func attributedStrings(from pasteboard: NSPasteboard) -> [String] {
+        [NSPasteboard.PasteboardType.rtf, .rtfd, .html].compactMap { type in
             guard let data = pasteboard.data(forType: type),
                   let attributed = try? NSAttributedString(
                     data: data,
                     options: [:],
                     documentAttributes: nil
-                  ) else { continue }
+                  ) else { return nil }
             return minimallySanitized(attributed.string)
         }
-        return nil
+    }
+
+    private static func textByUnwrappingSerializedSuperscripts(
+        in plain: String,
+        whenConfirmedBy attributedFallbacks: [String]
+    ) -> String {
+        // A few PDF producers publish literal markup in public.utf8-plain-text while
+        // their rich representation correctly describes the same characters as a
+        // superscript. Only unwrap citation-shaped, paired tags, and only when the
+        // resulting text exactly matches a rich representation's visible string.
+        // Thus a user copying literal HTML/XML/code keeps the markup unchanged.
+        guard let expression = serializedSuperscriptExpression else {
+            return plain
+        }
+        let range = NSRange(plain.startIndex..., in: plain)
+        guard expression.firstMatch(in: plain, range: range) != nil else {
+            return plain
+        }
+
+        let unwrapped = expression.stringByReplacingMatches(
+            in: plain,
+            range: range,
+            withTemplate: "$1"
+        )
+        let confirmed = attributedFallbacks.contains { visibleText in
+            visibleText == unwrapped || visibleText == unwrapped + "\n"
+        }
+        return confirmed ? unwrapped : plain
+    }
+
+    private static func containsSerializedSuperscript(in text: String) -> Bool {
+        guard let expression = serializedSuperscriptExpression else { return false }
+        return expression.firstMatch(
+            in: text,
+            range: NSRange(text.startIndex..., in: text)
+        ) != nil
     }
 
     private static func minimallySanitized(_ text: String) -> String {
@@ -4639,6 +4733,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         session: Int
     ) {
         guard session == longTextSession else { return }
+        logTextPipelineSnapshot("3-before-webview-submission", chunk)
         guard let serviceWebView = activeTranslationWebView else {
             translateLongTextChunkUsingAPI(chunk, session: session)
             return
@@ -4905,6 +5000,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             )
             let resultPayload = result as? [Any]
             let returnedSource = resultPayload?.first as? String
+            logTextPipelineSnapshot("4-google-textarea-after-write", returnedSource)
             if !self.didLogFirstTextInjection,
                let injectedSource = returnedSource,
                injectedSource == chunk {
@@ -5010,6 +5106,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             )
             return
         }
+        let translation = TranslationServiceTextNormalizer.normalize(
+            translation,
+            forSource: longTextChunks[longTextChunkIndex].text
+        )
         let separator = longTextChunks[longTextChunkIndex].separatorAfter
         if longTextReplacesVisibleTranslation && longTextChunkIndex == 0 {
             longTextTranslation = translation + separator
@@ -5782,8 +5882,13 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let expectedSource = self.longTextChunks[self.longTextChunkIndex].text
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let translation = (payload?.dropFirst().first as? String ?? "")
+            let extractedTranslation = (payload?.dropFirst().first as? String ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            logTextPipelineSnapshot("google-dom-result-before-normalization", extractedTranslation)
+            let translation = TranslationServiceTextNormalizer.normalize(
+                extractedTranslation,
+                forSource: expectedSource
+            )
 
             // Do not accept a result until Google's textarea contains the
             // exact chunk currently being translated. This prevents a
@@ -6522,8 +6627,16 @@ extension ViewController: WKScriptMessageHandler {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let source = observedSource
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                let translation = observedTranslation
+                let extractedTranslation = observedTranslation
                     .trimmingCharacters(in: .whitespacesAndNewlines)
+                logTextPipelineSnapshot(
+                    "google-dom-observer-result-before-normalization",
+                    extractedTranslation
+                )
+                let translation = TranslationServiceTextNormalizer.normalize(
+                    extractedTranslation,
+                    forSource: expectedSource
+                )
                 guard source == expectedSource,
                       !translation.isEmpty,
                       translation.range(
