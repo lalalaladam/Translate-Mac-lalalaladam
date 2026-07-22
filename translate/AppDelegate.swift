@@ -7,6 +7,9 @@
 
 import Cocoa
 import Carbon.HIToolbox
+import os
+
+private let appLifecycleLogger = Logger(subsystem: "com.lalalaladam.translate", category: "StartupTiming")
 
 class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -35,6 +38,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var shortcutSettingsController: ShortcutSettingsWindowController?
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+#if DEBUG
+        appLifecycleLogger.info("Application did finish launching")
+#endif
         AppInterfaceLanguagePreferences.registerDefaults()
         TranslateFeaturePreferences.registerDefaults()
         TranslateLanguagePreferences.registerDefaults()

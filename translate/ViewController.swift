@@ -13,11 +13,30 @@ private let translationPipelineLogger = Logger(
     category: "TranslationPipeline"
 )
 
+private let startupTimingLogger = Logger(
+    subsystem: "com.lalalaladam.translate",
+    category: "StartupTiming"
+)
+
+private let inputMethodTimingLogger = Logger(
+    subsystem: "com.lalalaladam.translate",
+    category: "InputMethodTiming"
+)
+
 /// A deliberately plain-text editor for the app-owned source pane.  It does
 /// not depend on WebKit's 5,000-character field, and inserting the pasteboard
 /// string directly keeps very large pastes on the standard NSTextView path.
 private final class TranslationSourceTextView: NSTextView {
+    private var hasPendingImmediatePaste = false
+
+    func consumeImmediatePasteFlag() -> Bool {
+        let pending = hasPendingImmediatePaste
+        hasPendingImmediatePaste = false
+        return pending
+    }
+
     override func paste(_ sender: Any?) {
+        hasPendingImmediatePaste = true
         if let text = PlainTextPasteboardReader.read(from: .general) {
             insertText(text, replacementRange: selectedRange())
             return
@@ -64,6 +83,11 @@ private enum PlainTextPasteboardReader {
 private struct TranslationChunk {
     let text: String
     let separatorAfter: String
+}
+
+private enum TranslationSubmissionMode {
+    case debouncedNativeInput
+    case immediate
 }
 
 private enum PronunciationSource {
@@ -1103,9 +1127,32 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var automaticTranslationWebView: BackgroundTranslationWebView!
     private weak var activeTranslationWebView: WKWebView?
     private var automaticTranslationWebViewReady = false
+    private var automaticTranslationWebViewLoading = false
     private var automaticTranslationTarget = TranslateLanguagePreferences.target
     private var pendingAutomaticTranslationSource: String?
     private var pendingAutomaticTranslationSession: Int?
+    private var pendingPrimaryTranslationSource: String?
+    private var pendingPrimaryTranslationSession: Int?
+    private let startupTimingOrigin = ProcessInfo.processInfo.systemUptime
+    private var didLogFirstTranslationCommand = false
+    private var didLogFirstTextInjection = false
+    private var didLogFirstTranslationResult = false
+    private struct TranslationTimingRequest {
+        let id: Int
+        let label: String
+        let source: String
+        var session: Int
+        let startedAt: CFTimeInterval
+        var didLogEvaluationStart = false
+        var didLogExtractionStart = false
+        var didLogFirstValidExtraction = false
+        var didLogFirstValidJSResult = false
+        var didLogFirstDisplay = false
+        var didLogStableResult = false
+        var didLogFinalDisplay = false
+    }
+    private var translationTimingRequestCount = 0
+    private var translationTimingRequest: TranslationTimingRequest?
     var visualEffect: NSVisualEffectView!
     private var workspaceBackgroundView: NSVisualEffectView?
     private var keepOnTopButton: NSButton!
@@ -1195,9 +1242,15 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var longTextSourceLanguage = TranslateLanguagePreferences.source.rawValue
     private var longTextTargetLanguage = TranslateLanguagePreferences.target.rawValue
     private var longTextDebounceWorkItem: DispatchWorkItem?
+    private var longTextFallbackTask: URLSessionDataTask?
+    private var translationInputGeneration = 0
+    private var languageSwapInProgress = false
+    private var languageSwapPendingText: String?
+    private var languageSwapSnapshotText: String?
     private var restoreSourceFocusAfterLanguageSwap = false
-    // Keep typing responsive while still allowing IME composition and rapid
-    // paste/input bursts to settle before starting a new web translation.
+    // A committed IME candidate is still part of continuous human typing.
+    // Coalesce those edits, while paste and explicit submission stay immediate.
+    private let nativeTextTranslationDebounce: TimeInterval = 0.25
     private let longTextTranslationDebounce: TimeInterval = 0.12
     private let longTextPollInterval: TimeInterval = 0.15
     private let longTextResultSettlingInterval: TimeInterval = 0.75
@@ -1205,13 +1258,26 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     // that native limit while retaining a small safety margin for Web UI
     // changes and characters represented by surrogate pairs.
     private let googleWebChunkUTF16Limit = 4_800
-    // Google can publish a very short provisional DOM result (for example,
-    // "It") and refine it more than 750 ms later even after typing has
-    // stopped. A one-chunk request is previewed immediately, so keeping its
-    // observer alive a little longer improves correctness without delaying
-    // what the user sees. Multi-chunk work keeps the shorter interval to
-    // avoid adding latency to every chunk.
-    private let singleChunkResultSettlingInterval: TimeInterval = 1.6
+    // Google can publish a provisional result and refine it in a later DOM
+    // mutation. Use a shorter quiet period for ordinary short input, while
+    // progressively retaining the conservative window for larger one-chunk
+    // requests. recordLongTextCandidate resets the timer whenever the valid
+    // result text changes, so this is an event-driven debounce rather than a
+    // fixed delay from the original input event.
+    private func resultSettlingInterval() -> TimeInterval {
+        guard longTextChunks.count == 1,
+              let chunk = longTextChunks.first else {
+            return longTextResultSettlingInterval
+        }
+        switch chunk.text.utf16.count {
+        case ...600:
+            return 0.8
+        case ...2_000:
+            return 1.1
+        default:
+            return 1.6
+        }
+    }
     // A completely transparent WKWebView can be deprioritized by WebKit's
     // rendering pipeline. Keep the background translator imperceptibly
     // visible so Google updates its result DOM at normal foreground speed.
@@ -1246,6 +1312,68 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         let handlers = readyHandlers
         readyHandlers.removeAll()
         handlers.forEach { $0() }
+    }
+
+    private func logStartupTiming(_ event: String) {
+#if DEBUG
+        let elapsed = ProcessInfo.processInfo.systemUptime - startupTimingOrigin
+        startupTimingLogger.info("\(event, privacy: .public) +\(elapsed, format: .fixed(precision: 3))s")
+#endif
+    }
+
+    private func startTranslationTimingRequest(source: String, session: Int) {
+#if DEBUG
+        if translationTimingRequest?.source == source,
+           translationTimingRequest?.didLogFinalDisplay == false { return }
+        translationTimingRequestCount += 1
+        let label: String
+        switch translationTimingRequestCount {
+        case 1: label = "cold-first"
+        case 2: label = "warm-second"
+        default: label = "request-\(translationTimingRequestCount)"
+        }
+        translationTimingRequest = TranslationTimingRequest(
+            id: translationTimingRequestCount,
+            label: label,
+            source: source,
+            session: session,
+            startedAt: CACurrentMediaTime()
+        )
+        logTranslationTiming("user-trigger", details: "chars=\(source.count) utf16=\(source.utf16.count)")
+#endif
+    }
+
+    private func updateTranslationTimingSession(_ session: Int) {
+#if DEBUG
+        translationTimingRequest?.session = session
+#endif
+    }
+
+    private func logTranslationTiming(_ milestone: String, details: String = "") {
+#if DEBUG
+        guard let request = translationTimingRequest else { return }
+        let elapsed = (CACurrentMediaTime() - request.startedAt) * 1_000
+        translationPipelineLogger.info(
+            "[TranslationTiming][\(request.label, privacy: .public)][request=\(request.id, privacy: .public)][session=\(request.session, privacy: .public)] milestone=\(milestone, privacy: .public) elapsed_ms=\(elapsed, format: .fixed(precision: 3)) \(details, privacy: .public)"
+        )
+#endif
+    }
+
+    private func logTranslationCoordinator(
+        _ milestone: String,
+        source: String? = nil,
+        requestID: Int? = nil,
+        session: Int? = nil
+    ) {
+#if DEBUG
+        let resolvedRequestID = requestID ?? translationTimingRequest?.id ?? 0
+        let resolvedSession = session ?? longTextSession
+        let characterCount = source?.count ?? longTextSourceView?.string.count ?? 0
+        let direction = "\(currentSourceLanguage.rawValue)->\(currentTargetLanguage.rawValue)"
+        translationPipelineLogger.info(
+            "[TranslationTiming][coordinator][request=\(resolvedRequestID, privacy: .public)][session=\(resolvedSession, privacy: .public)] milestone=\(milestone, privacy: .public) chars=\(characterCount, privacy: .public) direction=\(direction, privacy: .public)"
+        )
+#endif
     }
 
     private func installUserScripts(on controller: WKUserContentController) {
@@ -1650,6 +1778,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     }
 
     override func loadView() {
+        logStartupTiming("WebViews creating")
         let width = CGFloat(Constants.WIDTH)
         let height = CGFloat(Constants.HEIGHT)
         let barHeight = Self.windowBehaviorBarHeight
@@ -1701,6 +1830,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         automaticTranslationWebView.setValue(false, forKey: "drawsBackground")
         automaticTranslationWebView.alphaValue = backgroundTranslationWebViewAlpha
         activeTranslationWebView = webView
+        logStartupTiming("WebViews created")
 
         // Give the native settings bar its own layout space. Previously it
         // was overlaid on WKWebView, so long translations could place the
@@ -1793,11 +1923,13 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         topHandle.autoresizingMask = [.width, .minYMargin]
         self.view.addSubview(topHandle)
 
-        // Do not leave a blank panel while a network service or VPN is still
-        // starting. The overlay is replaced by Google Translate as soon as
-        // the first successful navigation finishes.
-        loadTranslationService()
+        // Automatic detection handles the common mismatch between the
+        // selected source language and freshly pasted text. Start that hidden
+        // service first so an immediate cold-launch request is less likely to
+        // wait behind the primary page. Both loads remain asynchronous; the
+        // native window never waits for either network navigation.
         loadAutomaticTranslationService(target: currentTargetLanguage)
+        loadTranslationService()
     }
 
     override func viewDidLayout() {
@@ -2465,6 +2597,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         isReady = false
         hideConnectionOverlay()
         scheduleConnectionOverlayIfStillLoading(attempt: attempt)
+        logStartupTiming("Primary page load started")
         webView.load(
             URLRequest(
                 url: defaultTranslationURL(),
@@ -2542,6 +2675,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     ) {
         guard webView !== automaticTranslationWebView else {
             automaticTranslationWebViewReady = false
+            automaticTranslationWebViewLoading = false
             return
         }
         handleTranslationLoadFailure()
@@ -2554,12 +2688,56 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     ) {
         guard webView !== automaticTranslationWebView else {
             automaticTranslationWebViewReady = false
+            automaticTranslationWebViewLoading = false
             return
         }
         handleTranslationLoadFailure()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        logStartupTiming(webView === automaticTranslationWebView
+            ? "Automatic navigation finished"
+            : "Primary navigation finished")
+        waitForTranslationDOM(in: webView)
+    }
+
+    private func waitForTranslationDOM(in webView: WKWebView) {
+        let service = webView === automaticTranslationWebView ? "automatic" : "primary"
+        webView.evaluateJavaScript(#"""
+            (() => {
+                const notify = () => {
+                    if (!document.querySelector("textarea")) return false;
+                    window.webkit.messageHandlers.callbackHandler.postMessage({
+                        action: "translationServiceDOMReady",
+                        service: "\#(service)"
+                    });
+                    return true;
+                };
+                if (notify()) return true;
+                window.__macTranslateDOMReadyObserver?.disconnect();
+                window.__macTranslateDOMReadyObserver = new MutationObserver(() => {
+                    if (notify()) window.__macTranslateDOMReadyObserver?.disconnect();
+                });
+                window.__macTranslateDOMReadyObserver.observe(document.documentElement, {
+                    childList: true,
+                    subtree: true
+                });
+                return false;
+            })();
+        """#, completionHandler: nil)
+    }
+
+    private func configureTranslationPageAfterDOMReady(_ webView: WKWebView) {
+        logStartupTiming(webView === automaticTranslationWebView
+            ? "Automatic DOM ready"
+            : "Primary DOM ready")
+        installTranslationTimingRuntime(in: webView)
+        logInputMethodTiming(
+            webView === automaticTranslationWebView
+                ? "automatic-webview-dom-ready"
+                : "primary-webview-dom-ready",
+            webFocus: false
+        )
         if webView === automaticTranslationWebView {
             guard translationPageMatches(
                 source: .automatic,
@@ -2568,6 +2746,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             ), automaticTranslationTarget == currentTargetLanguage else {
                 return
             }
+            automaticTranslationWebViewLoading = false
             automaticTranslationWebViewReady = true
             if let source = pendingAutomaticTranslationSource,
                pendingAutomaticTranslationSession == longTextSession,
@@ -3531,10 +3710,62 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 // no Google frame can appear during startup or reload.
                 self.activateCustomTranslationWorkspace()
                 self.markReady()
+                self.logStartupTiming("Primary CSS and scripts ready")
+                self.logInputMethodTiming("primary-css-scripts-ready", webFocus: false)
+                self.completeLanguageSwapIfReady()
+                self.submitPendingPrimaryTranslationIfCurrent()
                 self.loadTimeoutWorkItem?.cancel()
                 self.automaticRetryWorkItem?.cancel()
                 self.hideConnectionOverlay()
             }
+        }
+    }
+
+    private func installTranslationTimingRuntime(in webView: WKWebView) {
+        webView.evaluateJavaScript(#"""
+            (() => {
+                if (window.__macTranslateTimingRuntimeReady) return true;
+                window.__macTranslateTimingRuntimeReady = true;
+                window.__macTranslateActiveTiming = null;
+                window.__macTranslateTimingObserver = new MutationObserver((records) => {
+                    const timing = window.__macTranslateActiveTiming;
+                    if (!timing || timing.firstResultMutationAt != null) return;
+                    const touchesResult = records.some((record) => {
+                        const target = record.target?.nodeType === Node.ELEMENT_NODE
+                            ? record.target
+                            : record.target?.parentElement;
+                        if (target?.closest?.(".QcsUad")) return true;
+                        return Array.from(record.addedNodes || []).some((node) => {
+                            const element = node.nodeType === Node.ELEMENT_NODE
+                                ? node
+                                : node.parentElement;
+                            return element?.matches?.(".QcsUad") ||
+                                element?.closest?.(".QcsUad") ||
+                                element?.querySelector?.(".QcsUad");
+                        });
+                    });
+                    if (!touchesResult) return;
+                    timing.firstResultMutationAt = performance.now();
+                    window.webkit.messageHandlers.callbackHandler.postMessage({
+                        action: "translationTimingJS",
+                        requestID: timing.requestID,
+                        session: timing.session,
+                        milestone: "first-result-dom-mutation",
+                        jsElapsedMS: timing.firstResultMutationAt - timing.jsStartedAt
+                    });
+                });
+                window.__macTranslateTimingObserver.observe(document.documentElement, {
+                    childList: true,
+                    subtree: true,
+                    characterData: true
+                });
+                return true;
+            })();
+        """#) { [weak self] result, error in
+            guard let self, result as? Bool == true, error == nil else { return }
+            self.logStartupTiming(webView === self.automaticTranslationWebView
+                ? "Automatic timing observer ready"
+                : "Primary timing observer ready")
         }
     }
 
@@ -3615,35 +3846,37 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         windowBehaviorDivider?.layer?.backgroundColor = NSColor.separatorColor.cgColor
     }
 
-    public func focusAndSelectField() {
+    private func logInputMethodTiming(_ event: String, webFocus: Bool = false) {
+#if DEBUG
+        let responder = view.window?.firstResponder
+        let responderType = responder.map { String(describing: type(of: $0)) } ?? "nil"
+        let marked = longTextSourceView?.hasMarkedText() ?? false
+        let markedRange = longTextSourceView?.markedRange() ?? NSRange(location: NSNotFound, length: 0)
+        inputMethodTimingLogger.info(
+            "[InputMethodTiming] event=\(event, privacy: .public) firstResponder=\(responderType, privacy: .public) marked=\(marked, privacy: .public) markedRange={\(markedRange.location, privacy: .public),\(markedRange.length, privacy: .public)} webFocus=\(webFocus, privacy: .public)"
+        )
+#endif
+    }
+
+    public func focusAndSelectField(selectContents: Bool = true) {
         if longTextOverlay?.isHidden == false, let sourceView = longTextSourceView {
-            sourceView.window?.makeFirstResponder(sourceView)
-            sourceView.selectAll(nil)
+            logInputMethodTiming("native-focus-request select=\(selectContents)")
+            guard !sourceView.hasMarkedText() else {
+                logInputMethodTiming("native-focus-skipped-marked-text")
+                return
+            }
+            if sourceView.window?.firstResponder !== sourceView {
+                sourceView.window?.makeFirstResponder(sourceView)
+            }
+            if selectContents {
+                sourceView.selectAll(nil)
+            }
+            logInputMethodTiming("native-focus-completed select=\(selectContents)")
             return
         }
-        self.webView.evaluateJavaScript("""
-            setTimeout(function() {
-                var inlineState = window.__macTranslateInlineLongText;
-                var active = document.activeElement;
-                var inlineEditor = inlineState &&
-                    (active === inlineState.left.text || active === inlineState.right.text) ?
-                    active : inlineState?.left?.text;
-                if (inlineEditor) {
-                    inlineEditor.focus();
-                    var range = document.createRange();
-                    range.selectNodeContents(inlineEditor);
-                    var selection = window.getSelection();
-                    selection.removeAllRanges();
-                    selection.addRange(range);
-                    return;
-                }
-                var textarea = document.getElementsByTagName("textarea")[0];
-                if (textarea) {
-                    textarea.focus();
-                    textarea.select();
-                }
-            }, 20);
-        """, completionHandler: nil)
+        // Both WKWebViews are background services and intentionally reject
+        // first responder. Never focus their hidden textarea as a fallback.
+        logInputMethodTiming("web-focus-skipped-no-native-editor", webFocus: false)
     }
 
     public func reloadWithCurrentPreferences() {
@@ -3669,8 +3902,14 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     }
 
     private func loadAutomaticTranslationService(target: TranslateLanguage) {
+        if automaticTranslationTarget == target,
+           automaticTranslationWebViewReady || automaticTranslationWebViewLoading {
+            return
+        }
         automaticTranslationWebViewReady = false
+        automaticTranslationWebViewLoading = true
         automaticTranslationTarget = target
+        logStartupTiming("Automatic page load started")
         automaticTranslationWebView.load(
             URLRequest(
                 url: translationURL(source: .automatic, target: target),
@@ -3803,10 +4042,18 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             clearLongTextTranslationForEmptyInput()
             return
         }
+        startTranslationTimingRequest(source: source, session: longTextSession)
+        logTranslationTiming("swift-begin-translation")
+        if !didLogFirstTranslationCommand {
+            didLogFirstTranslationCommand = true
+            logStartupTiming("First translation command received")
+        }
 
         let effectiveSourceLanguage = effectiveSourceLanguage(for: source)
         let targetLanguage = currentTargetLanguage
         if effectiveSourceLanguage == .automatic {
+            pendingPrimaryTranslationSource = nil
+            pendingPrimaryTranslationSession = nil
             activeTranslationWebView = automaticTranslationWebView
             guard automaticTranslationWebViewReady,
                   translationPageMatches(
@@ -3822,6 +4069,13 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             pendingAutomaticTranslationSource = nil
             pendingAutomaticTranslationSession = nil
         } else {
+            guard isReady else {
+                pendingPrimaryTranslationSource = source
+                pendingPrimaryTranslationSession = longTextSession
+                return
+            }
+            pendingPrimaryTranslationSource = nil
+            pendingPrimaryTranslationSession = nil
             pendingAutomaticTranslationSource = nil
             pendingAutomaticTranslationSession = nil
             activeTranslationWebView = webView
@@ -3858,6 +4112,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         // this request, even if its text happens to match the current chunk.
         longTextActiveWebViewGeneration += 1
         longTextSession += 1
+        updateTranslationTimingSession(longTextSession)
         longTextSource = source
         longTextReplacesVisibleTranslation = keepsCompatibleVisibleResult
         longTextFormattingOnlyRefresh = formattingOnlyRefresh
@@ -3875,6 +4130,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextTargetLanguage = targetLanguage.rawValue
         longTextOverlay?.isHidden = false
         if longTextSourceView?.string != source {
+            logInputMethodTiming("native-source-rewrite-before-translation")
             isUpdatingNativeWorkspace = true
             longTextSourceView?.string = source
             isUpdatingNativeWorkspace = false
@@ -3889,11 +4145,31 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         translateNextLongTextChunk(session: longTextSession)
     }
 
+    private func submitPendingPrimaryTranslationIfCurrent() {
+        guard let source = pendingPrimaryTranslationSource,
+              pendingPrimaryTranslationSession == longTextSession,
+              longTextSource == source,
+              longTextSourceView?.string == source else {
+            pendingPrimaryTranslationSource = nil
+            pendingPrimaryTranslationSession = nil
+            return
+        }
+        pendingPrimaryTranslationSource = nil
+        pendingPrimaryTranslationSession = nil
+        beginLongTextTranslation(source)
+    }
+
     private func activateCustomTranslationWorkspace() {
         // Keep the page mounted and transparent. This preserves Google's
         // proven WebView translation behavior without exposing its UI.
         webView.isHidden = false
         webView.alphaValue = backgroundTranslationWebViewAlpha
+        // A language swap owns the pending source until the new page is fully
+        // configured. Do not let page activation submit the swapped snapshot
+        // in parallel with newer native input.
+        if languageSwapInProgress {
+            return
+        }
         // Once the native workspace exists, its editor is the sole source of
         // truth. Google's hidden textarea can contain only the most recently
         // translated chunk after a long-text session. Reading it here after a
@@ -3913,6 +4189,26 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             self.webView.alphaValue = self.backgroundTranslationWebViewAlpha
             self.restoreSourceFocusAfterLanguageSwapIfNeeded()
         }
+    }
+
+    private func completeLanguageSwapIfReady() {
+        guard languageSwapInProgress,
+              isReady,
+              translationPageMatches(
+                  source: currentSourceLanguage,
+                  target: currentTargetLanguage
+              ) else { return }
+
+        let latestSource = languageSwapPendingText ?? longTextSourceView?.string ?? ""
+        languageSwapInProgress = false
+        languageSwapPendingText = nil
+        languageSwapSnapshotText = nil
+        logTranslationCoordinator("language-swap-ready", source: latestSource)
+        guard !latestSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        logTranslationCoordinator("language-swap-latest-text-submitted", source: latestSource)
+        queueLongTextTranslation(latestSource, mode: .immediate)
     }
 
     private func restoreSourceFocusAfterLanguageSwapIfNeeded(attempt: Int = 0) {
@@ -3960,65 +4256,164 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         }
     }
 
-    private func queueLongTextTranslation(_ source: String) {
+    private func cancelPendingTranslationDebounce(source: String? = nil) {
+        guard longTextDebounceWorkItem != nil else { return }
         longTextDebounceWorkItem?.cancel()
+        longTextDebounceWorkItem = nil
+        logTranslationCoordinator("translation-debounce-cancelled", source: source)
+    }
+
+    private func invalidateActiveTranslationWork(source: String?) {
+        let invalidatedRequestID = translationTimingRequest?.id
+        let invalidatedSession = longTextSession
+        let hadActiveRequest = translationTimingRequest != nil ||
+            longTextScheduledPoll != nil || longTextFallbackTask != nil ||
+            !longTextChunks.isEmpty
+
+        longTextSession += 1
+        longTextActiveWebViewGeneration += 1
+        pendingAutomaticTranslationSource = nil
+        pendingAutomaticTranslationSession = nil
+        pendingPrimaryTranslationSource = nil
+        pendingPrimaryTranslationSession = nil
+        longTextPollInFlightSession = nil
+        longTextWebDeadline = nil
+        longTextCandidateTranslation = nil
+        longTextCandidateUpdatedAt = nil
+        longTextChunks = []
+        longTextChunkIndex = 0
+
+        if longTextScheduledPoll != nil {
+            longTextScheduledPoll?.cancel()
+            longTextScheduledPoll = nil
+            logTranslationCoordinator(
+                "stability-timer-cancelled",
+                source: source,
+                requestID: invalidatedRequestID,
+                session: invalidatedSession
+            )
+        }
+        if longTextFallbackTask != nil {
+            longTextFallbackTask?.cancel()
+            longTextFallbackTask = nil
+            logTranslationCoordinator(
+                "fallback-cancelled-as-stale",
+                source: source,
+                requestID: invalidatedRequestID,
+                session: invalidatedSession
+            )
+        }
+
+        for serviceWebView in [webView, automaticTranslationWebView] {
+            serviceWebView?.evaluateJavaScript(#"""
+                window.__macTranslateResultObserver?.disconnect();
+                clearTimeout(window.__macTranslateResultNotificationTimer);
+            """#, completionHandler: nil)
+        }
+        if hadActiveRequest {
+            logTranslationCoordinator(
+                "observer-disconnected",
+                source: source,
+                requestID: invalidatedRequestID,
+                session: invalidatedSession
+            )
+            logTranslationCoordinator(
+                "request-invalidated-by-new-input",
+                source: source,
+                requestID: invalidatedRequestID,
+                session: invalidatedSession
+            )
+        }
+#if DEBUG
+        translationTimingRequest = nil
+#endif
+    }
+
+    private func queueLongTextTranslation(
+        _ source: String,
+        mode: TranslationSubmissionMode = .immediate
+    ) {
+        cancelPendingTranslationDebounce(source: source)
         guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             clearLongTextTranslationForEmptyInput()
             return
         }
-        longTextSession += 1
+
+        translationInputGeneration += 1
+        let inputGeneration = translationInputGeneration
+        invalidateActiveTranslationWork(source: source)
+
+        if languageSwapInProgress {
+            languageSwapPendingText = source
+            longTextSource = source
+            updateLongTextLabels()
+            logTranslationCoordinator("language-swap-pending-text-updated", source: source)
+            if languageSwapSnapshotText != nil {
+                languageSwapSnapshotText = nil
+                logTranslationCoordinator("language-swap-snapshot-cancelled", source: source)
+            }
+            return
+        }
+
         longTextSource = source
-        // Language controls and counts update at interaction time instead of
-        // Keep the last completed result on screen while the complete current
-        // source is being translated. The first stable new chunk replaces it.
         updateLongTextLabels()
         let status = setLongTextStatus(.preparing)
-        updateInlineLongText(
-            source: nil,
-            translation: longTextTranslation,
-            status: status
-        )
+        updateInlineLongText(source: nil, translation: longTextTranslation, status: status)
 
-        // NSTextView can notify while a Chinese/Japanese IME still owns
-        // marked text. Do not push that unfinished composition into Google,
-        // but always retry once the IME commits it. A later edit cancels this
-        // item, so an obsolete composition can never overwrite newer input.
-        if longTextSourceView?.hasMarkedText() == true {
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self,
-                      self.longTextSource == source else { return }
-                self.queueLongTextTranslation(source)
+        let scheduledSourceLanguage = currentSourceLanguage
+        let scheduledTargetLanguage = currentTargetLanguage
+        let delay: TimeInterval
+        switch mode {
+        case .debouncedNativeInput:
+            delay = nativeTextTranslationDebounce
+        case .immediate:
+            delay = source.utf16.count > googleWebChunkUTF16Limit
+                ? longTextTranslationDebounce
+                : 0
+        }
+
+        let submit = { [weak self] in
+            guard let self else { return }
+            self.longTextDebounceWorkItem = nil
+            guard inputGeneration == self.translationInputGeneration,
+                  !self.languageSwapInProgress,
+                  scheduledSourceLanguage == self.currentSourceLanguage,
+                  scheduledTargetLanguage == self.currentTargetLanguage,
+                  self.longTextSourceView?.hasMarkedText() != true,
+                  self.longTextSourceView?.string == source,
+                  self.longTextSource == source else {
+                return
             }
-            longTextDebounceWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: workItem)
-            return
+            if mode == .debouncedNativeInput {
+                self.logTranslationCoordinator("translation-debounce-fired", source: source)
+            }
+            self.startTranslationTimingRequest(
+                source: source,
+                session: self.longTextSession + 1
+            )
+            self.logTranslationTiming("swift-input-processing-started")
+            self.longTextSession += 1
+            self.updateTranslationTimingSession(self.longTextSession)
+            self.logTranslationTiming("native-input-processing-completed")
+            self.beginLongTextTranslation(source)
         }
 
-        // Match the original Google-DOM implementation for ordinary input:
-        // write committed text into the page immediately and let Google's
-        // own live translator start without an additional Swift debounce.
-        // Long input keeps a short debounce because it must be split into a
-        // sequence of independent Google Web translations.
-        if source.utf16.count <= googleWebChunkUTF16Limit {
-            beginLongTextTranslation(source)
+        if delay == 0 {
+            submit()
             return
         }
-
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.beginLongTextTranslation(source)
-        }
+        let workItem = DispatchWorkItem(block: submit)
         longTextDebounceWorkItem = workItem
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + longTextTranslationDebounce,
-            execute: workItem
-        )
+        if mode == .debouncedNativeInput {
+            logTranslationCoordinator("translation-debounce-scheduled", source: source)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     private func clearLongTextTranslationForEmptyInput() {
-        longTextDebounceWorkItem?.cancel()
-        longTextSession += 1
-        pendingAutomaticTranslationSource = nil
-        pendingAutomaticTranslationSession = nil
+        cancelPendingTranslationDebounce(source: "")
+        translationInputGeneration += 1
+        invalidateActiveTranslationWork(source: "")
         longTextSource = nil
         longTextTranslation = ""
         longTextCompletedSource = ""
@@ -4248,13 +4643,28 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             translateLongTextChunkUsingAPI(chunk, session: session)
             return
         }
+        let encodingStartedAt = CACurrentMediaTime()
         let encoded = Data(chunk.utf8).base64EncodedString()
+        logTranslationTiming(
+            "text-encoding-completed",
+            details: String(format: "duration_ms=%.3f", (CACurrentMediaTime() - encodingStartedAt) * 1_000)
+        )
         let serviceGeneration = longTextActiveWebViewGeneration
+        let timingRequestID = translationTimingRequest?.id ?? 0
+        let evaluationStartedAt = CACurrentMediaTime()
+        logTranslationTiming("evaluate-javascript-started")
 
         serviceWebView.evaluateJavaScript(#"""
             (() => {
+                const jsStartedAt = performance.now();
                 const textarea = document.querySelector("textarea");
                 if (!textarea) return false;
+                window.__macTranslateActiveTiming = {
+                    requestID: \#(timingRequestID),
+                    session: \#(session),
+                    jsStartedAt,
+                    firstResultMutationAt: null
+                };
                 const value = new TextDecoder().decode(
                     Uint8Array.from(atob("\#(encoded)"), (character) =>
                         character.charCodeAt(0))
@@ -4418,7 +4828,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                             chunkIndex: \#(longTextChunkIndex),
                             serviceGeneration: \#(serviceGeneration),
                             source: payload[0],
-                            translation: payload[1]
+                            translation: payload[1],
+                            jsElapsedMS: performance.now() - jsStartedAt,
+                            firstMutationMS: window.__macTranslateActiveTiming?.firstResultMutationAt == null
+                                ? -1
+                                : window.__macTranslateActiveTiming.firstResultMutationAt - jsStartedAt
                         });
                     }, 45);
                 };
@@ -4430,6 +4844,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                     subtree: true,
                     characterData: true
                 });
+                const observerReadyAt = performance.now();
                 const setter = Object.getOwnPropertyDescriptor(
                     HTMLTextAreaElement.prototype,
                     "value"
@@ -4441,7 +4856,18 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                     // clearing it first starts a second Google translation
                     // cycle and materially delays short translations.
                     setter.call(textarea, value);
+                    const textareaWrittenAt = performance.now();
                     textarea.dispatchEvent(new Event("input", { bubbles: true }));
+                    const inputDispatchedAt = performance.now();
+                    window.webkit.messageHandlers.callbackHandler.postMessage({
+                        action: "translationTimingJS",
+                        requestID: \#(timingRequestID),
+                        session: \#(session),
+                        milestone: "injection-completed",
+                        observerReadyMS: observerReadyAt - jsStartedAt,
+                        textareaWrittenMS: textareaWrittenAt - jsStartedAt,
+                        inputDispatchedMS: inputDispatchedAt - jsStartedAt
+                    });
                 } else {
                     // The result may have completed before this observer was
                     // installed. Deliver it immediately instead of waiting
@@ -4455,18 +4881,37 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                             chunkIndex: \#(longTextChunkIndex),
                             serviceGeneration: \#(serviceGeneration),
                             source: payload[0],
-                            translation: payload[1]
+                            translation: payload[1],
+                            jsElapsedMS: performance.now() - jsStartedAt,
+                            firstMutationMS: window.__macTranslateActiveTiming?.firstResultMutationAt == null
+                                ? -1
+                                : window.__macTranslateActiveTiming.firstResultMutationAt - jsStartedAt
                         });
                     }, 0);
                 }
-                return textarea.value;
+                return [textarea.value, {
+                    jsStartedMS: jsStartedAt,
+                    completionMS: performance.now() - jsStartedAt
+                }];
             })();
         """#) { [weak self] result, _ in
             guard let self,
                   session == self.longTextSession,
                   self.longTextActiveWebViewGeneration == serviceGeneration,
                   self.activeTranslationWebView === serviceWebView else { return }
-            guard let actualSource = result as? String,
+            self.logTranslationTiming(
+                "evaluate-javascript-completion",
+                details: String(format: "swift_duration_ms=%.3f", (CACurrentMediaTime() - evaluationStartedAt) * 1_000)
+            )
+            let resultPayload = result as? [Any]
+            let returnedSource = resultPayload?.first as? String
+            if !self.didLogFirstTextInjection,
+               let injectedSource = returnedSource,
+               injectedSource == chunk {
+                self.didLogFirstTextInjection = true
+                self.logStartupTiming("First text injection completed")
+            }
+            guard let actualSource = returnedSource,
                   actualSource == chunk else {
                 self.translateLongTextChunkUsingAPI(chunk, session: session)
                 return
@@ -4482,8 +4927,14 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         _ chunk: String,
         session: Int
     ) {
-        guard session == longTextSession,
+        guard isCurrentTranslationWork(session: session),
               let request = googleTranslationRequest(for: chunk) else {
+            logTranslationCoordinator("fallback-cancelled-as-stale", source: longTextSource)
+            return
+        }
+        logTranslationTiming("api-fallback-started")
+
+        guard session == longTextSession else {
             finishLongTextTranslationWithError(session: session)
             return
         }
@@ -4491,14 +4942,21 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         translationPipelineLogger.info(
             "Google Web translation unavailable; using API fallback for chunk: \(chunk, privacy: .public)"
         )
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             let translation = data.flatMap(Self.translationText(from:))
             let succeeded = error == nil &&
                 (response as? HTTPURLResponse).map({ 200..<300 ~= $0.statusCode }) == true &&
                 !(translation?.isEmpty ?? true)
 
             DispatchQueue.main.async {
-                guard let self, session == self.longTextSession else { return }
+                guard let self, self.isCurrentTranslationWork(session: session) else {
+                    self?.logTranslationCoordinator(
+                        "fallback-cancelled-as-stale",
+                        source: self?.longTextSource
+                    )
+                    return
+                }
+                self.longTextFallbackTask = nil
                 guard succeeded, let translation else {
                     if self.longTextChunkRetryCount == 0 {
                         self.longTextChunkRetryCount = 1
@@ -4520,7 +4978,23 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                     source: "direct API fallback"
                 )
             }
-        }.resume()
+        }
+        longTextFallbackTask?.cancel()
+        longTextFallbackTask = task
+        task.resume()
+    }
+
+    private func isCurrentTranslationWork(session: Int) -> Bool {
+        guard session == longTextSession,
+              !languageSwapInProgress,
+              longTextDebounceWorkItem == nil,
+              languageSwapPendingText == nil,
+              let source = longTextSource,
+              longTextSourceView?.string == source,
+              longTextTargetLanguage == currentTargetLanguage.rawValue else {
+            return false
+        }
+        return longTextSourceLanguage == effectiveSourceLanguage(for: source).rawValue
     }
 
     private func appendLongTextTranslation(
@@ -4546,6 +5020,12 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         }
         longTextWebDeadline = nil
         longTextTranslationView?.string = longTextTranslation
+#if DEBUG
+        if translationTimingRequest?.didLogFinalDisplay == false {
+            translationTimingRequest?.didLogFinalDisplay = true
+            logTranslationTiming("final-result-displayed", details: "source=\(source)")
+        }
+#endif
         translationPipelineLogger.info(
             "Final displayed translation (\(source)): \(self.longTextTranslation, privacy: .public)"
         )
@@ -4773,6 +5253,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     }
 
     private func swapCurrentTranslationLanguages() {
+        guard longTextSourceView?.hasMarkedText() != true else {
+            logInputMethodTiming("language-swap-skipped-marked-text")
+            return
+        }
         // Google cannot meaningfully swap an automatically detected source.
         // For all explicit pairs, exchange only the active session languages;
         // the persistent defaults in the menu remain untouched.
@@ -4801,6 +5285,17 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             completedTranslation = nil
         }
 
+        logTranslationCoordinator(
+            "language-swap-start",
+            source: completedTranslation ?? longTextSourceView?.string
+        )
+        cancelPendingTranslationDebounce(source: longTextSourceView?.string)
+        translationInputGeneration += 1
+        languageSwapInProgress = true
+        languageSwapPendingText = completedTranslation ?? longTextSourceView?.string
+        languageSwapSnapshotText = completedTranslation
+        invalidateActiveTranslationWork(source: languageSwapPendingText)
+
         let source = currentSourceLanguage
         currentSourceLanguage = currentTargetLanguage
         currentTargetLanguage = source
@@ -4818,7 +5313,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             longTextTranslationView?.string
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
         if panesAreEmpty {
+            languageSwapInProgress = false
+            languageSwapPendingText = nil
+            languageSwapSnapshotText = nil
             refreshWorkspaceLanguageTitles()
+            logTranslationCoordinator("language-swap-ready", source: "")
             return
         }
 
@@ -4826,13 +5325,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             // Cancel every old result callback before loading the reversed
             // language pair. The hidden Google textarea contains only its
             // latest chunk, so it must never be used as the swap source.
-            longTextDebounceWorkItem?.cancel()
-            longTextScheduledPoll?.cancel()
-            longTextScheduledPoll = nil
-            longTextPollInFlightSession = nil
-            longTextSession += 1
-            pendingAutomaticTranslationSource = nil
-            pendingAutomaticTranslationSession = nil
             longTextSource = swappedSource
             longTextTranslation = ""
             longTextCompletedSource = ""
@@ -5141,7 +5633,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 ).set;
                 setter.call(textarea, value);
                 textarea.dispatchEvent(new Event("input", { bubbles: true }));
-                textarea.focus();
             })();
         """#, completionHandler: nil)
     }
@@ -5170,6 +5661,13 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             return
         }
         let serviceGeneration = longTextActiveWebViewGeneration
+        let extractionStartedAt = CACurrentMediaTime()
+#if DEBUG
+        if translationTimingRequest?.didLogExtractionStart == false {
+            translationTimingRequest?.didLogExtractionStart = true
+            logTranslationTiming("swift-result-extraction-started")
+        }
+#endif
         serviceWebView.evaluateJavaScript(#"""
             (() => {
                 const selectors = [
@@ -5305,6 +5803,16 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 return
             }
 
+#if DEBUG
+            if self.translationTimingRequest?.didLogFirstValidExtraction == false {
+                self.translationTimingRequest?.didLogFirstValidExtraction = true
+                self.logTranslationTiming(
+                    "swift-valid-result-extracted",
+                    details: String(format: "extraction_ms=%.3f", (CACurrentMediaTime() - extractionStartedAt) * 1_000)
+                )
+            }
+#endif
+
             // A cleared Google input can retain the preceding translation for
             // a moment. Do not append that stale result.  Google also writes
             // sentence translations in stages (for example, it can expose
@@ -5325,9 +5833,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 self.scheduleLongTextPoll(session: session)
                 return
             }
-            let settlingInterval = self.longTextChunks.count == 1
-                ? self.singleChunkResultSettlingInterval
-                : self.longTextResultSettlingInterval
+            let settlingInterval = self.resultSettlingInterval()
             let remainingQuietTime = settlingInterval -
                 Date().timeIntervalSince(candidateUpdatedAt)
             guard remainingQuietTime <= 0 else {
@@ -5339,6 +5845,15 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             }
 
             self.longTextLastWebTranslation = translation
+#if DEBUG
+            if self.translationTimingRequest?.didLogStableResult == false {
+                self.translationTimingRequest?.didLogStableResult = true
+                self.logTranslationTiming(
+                    "result-declared-stable",
+                    details: String(format: "quiet_ms=%.0f", settlingInterval * 1_000)
+                )
+            }
+#endif
             self.appendLongTextTranslation(
                 translation,
                 session: session,
@@ -5378,6 +5893,12 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
               !translation.isEmpty else { return }
 
         longTextTranslationView?.string = translation
+#if DEBUG
+        if translationTimingRequest?.didLogFirstDisplay == false {
+            translationTimingRequest?.didLogFirstDisplay = true
+            logTranslationTiming("first-valid-result-displayed")
+        }
+#endif
         updateInlineLongText(
             source: nil,
             translation: translation,
@@ -5666,13 +6187,14 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             return
         }
         if sourceView.hasMarkedText() {
-            // A previous debounce must not fire while a candidate is still
-            // being composed; wait for the final committed text change.
-            longTextDebounceWorkItem?.cancel()
-            longTextSession += 1
+            logInputMethodTiming("text-did-change-marked-text")
+            cancelPendingTranslationDebounce(source: sourceView.string)
+            translationInputGeneration += 1
+            invalidateActiveTranslationWork(source: sourceView.string)
             return
         }
         let source = sourceView.string
+        logTranslationCoordinator("native-text-committed", source: source)
         if source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             stopSpeaking()
         }
@@ -5687,7 +6209,12 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             return
         }
 
-        queueLongTextTranslation(source)
+        let isPaste = (sourceView as? TranslationSourceTextView)?
+            .consumeImmediatePasteFlag() == true
+        queueLongTextTranslation(
+            source,
+            mode: isPaste ? .immediate : .debouncedNativeInput
+        )
     }
 
     @objc private func workspaceClearSource() {
@@ -5938,6 +6465,30 @@ extension ViewController: WKScriptMessageHandler {
     ) {
         if let payload = message.body as? [String: Any],
            let action = payload["action"] as? String {
+            if action == "translationTimingJS",
+               let requestID = (payload["requestID"] as? NSNumber)?.intValue,
+               let session = (payload["session"] as? NSNumber)?.intValue,
+               requestID == translationTimingRequest?.id,
+               session == translationTimingRequest?.session,
+               let milestone = payload["milestone"] as? String {
+                let details = payload
+                    .filter { !["action", "requestID", "session", "milestone"].contains($0.key) }
+                    .sorted { $0.key < $1.key }
+                    .map { "\($0.key)=\($0.value)" }
+                    .joined(separator: " ")
+                logTranslationTiming("js-\(milestone)", details: details)
+                return
+            }
+
+            if action == "translationServiceDOMReady",
+               let service = payload["service"] as? String {
+                let serviceWebView: WKWebView = service == "automatic"
+                    ? automaticTranslationWebView
+                    : webView
+                configureTranslationPageAfterDOMReady(serviceWebView)
+                return
+            }
+
             if action == "copySource", let text = payload["text"] as? String {
                 copyToPasteboard(longTextSource ?? text)
                 return
@@ -5982,6 +6533,23 @@ extension ViewController: WKScriptMessageHandler {
                     return
                 }
 
+                if !didLogFirstTranslationResult {
+                    didLogFirstTranslationResult = true
+                    logStartupTiming("First translation result appeared")
+                }
+
+#if DEBUG
+                if translationTimingRequest?.didLogFirstValidJSResult == false {
+                    translationTimingRequest?.didLogFirstValidJSResult = true
+                    let jsElapsed = (payload["jsElapsedMS"] as? NSNumber)?.doubleValue ?? -1
+                    let firstMutation = (payload["firstMutationMS"] as? NSNumber)?.doubleValue ?? -1
+                    logTranslationTiming(
+                        "js-first-valid-result",
+                        details: String(format: "js_elapsed_ms=%.3f first_mutation_ms=%.3f", jsElapsed, firstMutation)
+                    )
+                }
+#endif
+
                 // This is only a candidate. Preview a source-verified
                 // one-chunk result immediately, but keep the observer alive
                 // and require the normal quiet interval before committing it
@@ -5992,18 +6560,20 @@ extension ViewController: WKScriptMessageHandler {
                     session: observedSession,
                     chunkIndex: observedChunkIndex
                 )
+                let settlingInterval = resultSettlingInterval()
+                let elapsedQuietTime = longTextCandidateUpdatedAt.map {
+                    Date().timeIntervalSince($0)
+                } ?? 0
                 scheduleLongTextPoll(
                     session: observedSession,
-                    delay: longTextChunks.count == 1
-                        ? singleChunkResultSettlingInterval
-                        : longTextResultSettlingInterval
+                    delay: max(0.05, settlingInterval - elapsedQuietTime)
                 )
                 return
             }
 
             if action == "translateLongText", let text = payload["text"] as? String {
                 DispatchQueue.main.async { [weak self] in
-                    self?.beginLongTextTranslation(text)
+                    self?.queueLongTextTranslation(text, mode: .immediate)
                 }
                 return
             }

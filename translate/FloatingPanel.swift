@@ -6,6 +6,12 @@
 //
 
 import AppKit
+import os
+
+private let inputMethodResponderLogger = Logger(
+    subsystem: "com.lalalaladam.translate",
+    category: "InputMethodTiming"
+)
 
 class FloatingPanel: NSPanel {
     public var isPresented = false
@@ -102,10 +108,10 @@ class FloatingPanel: NSPanel {
         controller.whenReady { [weak self] in
             guard let self else { return }
             self.hasPendingPresentation = false
-            // Only move focus once the page has a text area, and never revive
-            // a window that the user intentionally hid while it was loading.
-            guard self.isVisible, self.isPresented else { return }
-            controller.focusAndSelectField()
+            // The native editor already owns keyboard input when the panel is
+            // shown. Never restore focus from a WebView-ready callback: if an
+            // input method owns marked text, moving the responder away and
+            // back has already destroyed that composition.
         }
     }
 
@@ -149,6 +155,32 @@ class FloatingPanel: NSPanel {
         hasPendingPresentation = false
         isPresented = false
         orderOut(nil)
+    }
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+#if DEBUG
+        let previousType = firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+        let requestedType = responder.map { String(describing: type(of: $0)) } ?? "nil"
+        let textView = (responder as? NSTextView) ?? (firstResponder as? NSTextView)
+        let marked = textView?.hasMarkedText() ?? false
+        let markedRange = textView?.markedRange() ?? NSRange(location: NSNotFound, length: 0)
+#endif
+        if responder is BackgroundTranslationWebView {
+#if DEBUG
+            inputMethodResponderLogger.info(
+                "[InputMethodTiming] event=blocked-background-webview-first-responder previous=\(previousType, privacy: .public) requested=\(requestedType, privacy: .public) current=\(previousType, privacy: .public) accepted=false marked=\(marked, privacy: .public) markedRange={\(markedRange.location, privacy: .public),\(markedRange.length, privacy: .public)}"
+            )
+#endif
+            return false
+        }
+        let accepted = super.makeFirstResponder(responder)
+#if DEBUG
+        let currentType = firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+        inputMethodResponderLogger.info(
+            "[InputMethodTiming] event=first-responder-change previous=\(previousType, privacy: .public) requested=\(requestedType, privacy: .public) current=\(currentType, privacy: .public) accepted=\(accepted, privacy: .public) marked=\(marked, privacy: .public) markedRange={\(markedRange.location, privacy: .public),\(markedRange.length, privacy: .public)}"
+        )
+#endif
+        return accepted
     }
     
     override func performDrag(with event: NSEvent) {
