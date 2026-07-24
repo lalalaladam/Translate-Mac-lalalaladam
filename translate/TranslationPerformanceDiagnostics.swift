@@ -6,7 +6,6 @@
 import Foundation
 import QuartzCore
 
-#if DEBUG
 final class TranslationPerformanceDiagnostics {
     static let shared = TranslationPerformanceDiagnostics()
 
@@ -37,6 +36,11 @@ final class TranslationPerformanceDiagnostics {
     private let runID = UUID().uuidString
     private let logURL: URL
     private var requests: [Int: RequestContext] = [:]
+    // Keep the diagnostics useful for recent performance analysis without
+    // allowing an always-on production log to grow without bound. Retaining
+    // complete JSONL lines keeps the file directly consumable by jq.
+    private let maximumLogBytes = 5 * 1_024 * 1_024
+    private let retainedLogBytes = 2_500 * 1_024
 
     private init() {
         logURL = URL(fileURLWithPath: Self.logPath)
@@ -142,6 +146,7 @@ final class TranslationPerformanceDiagnostics {
         }
         data.append(0x0A)
         do {
+            trimLogIfNeeded(forAppending: data.count)
             let handle = try FileHandle(forWritingTo: logURL)
             try handle.seekToEnd()
             try handle.write(contentsOf: data)
@@ -149,6 +154,27 @@ final class TranslationPerformanceDiagnostics {
         } catch {
             // A logging failure must remain invisible to the translation path.
         }
+    }
+
+    private func trimLogIfNeeded(forAppending byteCount: Int) {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path),
+              let currentSize = attributes[.size] as? NSNumber,
+              currentSize.intValue + byteCount > maximumLogBytes,
+              let existingData = try? Data(contentsOf: logURL) else {
+            return
+        }
+
+        let retainedStartOffset = max(0, existingData.count - retainedLogBytes)
+        guard retainedStartOffset > 0 else { return }
+        let candidateStart = existingData.index(
+            existingData.startIndex,
+            offsetBy: retainedStartOffset
+        )
+        guard let lineBreak = existingData[candidateStart...].firstIndex(of: 0x0A) else {
+            return
+        }
+        let retainedData = Data(existingData[existingData.index(after: lineBreak)...])
+        try? retainedData.write(to: logURL, options: .atomic)
     }
 
     private static func roundedMilliseconds(_ value: Double) -> Double {
@@ -159,4 +185,3 @@ final class TranslationPerformanceDiagnostics {
         ISO8601DateFormatter().string(from: Date())
     }
 }
-#endif
