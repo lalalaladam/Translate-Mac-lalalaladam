@@ -5,20 +5,30 @@
 
 import Foundation
 import QuartzCore
+import os
 
 final class TranslationPerformanceDiagnostics {
     static let shared = TranslationPerformanceDiagnostics()
 
     static let logPath: String = {
-        let library = FileManager.default.urls(
-            for: .libraryDirectory,
+        // App Sandbox does not grant write access to the shared
+        // ~/Library/Logs directory. Application Support resolves inside the
+        // app container, so the diagnostics can be recorded by signed
+        // release builds as well as local builds.
+        let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first!
-        return library
-            .appendingPathComponent("Logs/Translate", isDirectory: true)
+        return applicationSupport
+            .appendingPathComponent("Translate/Logs", isDirectory: true)
             .appendingPathComponent("translation-performance.jsonl")
             .path
     }()
+
+    private static let logger = Logger(
+        subsystem: "com.lalalaladam.translate",
+        category: "PerformanceDiagnostics"
+    )
 
     private struct RequestContext {
         let startedAt: CFTimeInterval
@@ -36,6 +46,7 @@ final class TranslationPerformanceDiagnostics {
     private let runID = UUID().uuidString
     private let logURL: URL
     private var requests: [Int: RequestContext] = [:]
+    private var didReportWriteFailure = false
     // Keep the diagnostics useful for recent performance analysis without
     // allowing an always-on production log to grow without bound. Retaining
     // complete JSONL lines keeps the file directly consumable by jq.
@@ -51,7 +62,10 @@ final class TranslationPerformanceDiagnostics {
                     withIntermediateDirectories: true
                 )
                 if !FileManager.default.fileExists(atPath: logURL.path) {
-                    FileManager.default.createFile(atPath: logURL.path, contents: nil)
+                    guard FileManager.default.createFile(atPath: logURL.path, contents: nil) else {
+                        reportWriteFailure("Unable to create performance diagnostics log file.")
+                        return
+                    }
                 }
                 appendRecord([
                     "timestamp": Self.timestamp(),
@@ -66,7 +80,7 @@ final class TranslationPerformanceDiagnostics {
                     "status": "ready"
                 ])
             } catch {
-                // Diagnostics must never interfere with translation behavior.
+                reportWriteFailure("Unable to initialize performance diagnostics: \(error.localizedDescription)")
             }
         }
     }
@@ -152,8 +166,14 @@ final class TranslationPerformanceDiagnostics {
             try handle.write(contentsOf: data)
             try handle.close()
         } catch {
-            // A logging failure must remain invisible to the translation path.
+            reportWriteFailure("Unable to write performance diagnostics: \(error.localizedDescription)")
         }
+    }
+
+    private func reportWriteFailure(_ message: String) {
+        guard !didReportWriteFailure else { return }
+        didReportWriteFailure = true
+        Self.logger.error("\(message, privacy: .public)")
     }
 
     private func trimLogIfNeeded(forAppending byteCount: Int) {
