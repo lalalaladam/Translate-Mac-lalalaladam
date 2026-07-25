@@ -483,10 +483,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showAboutPanel() {
+        let debugMetadata = AppBuildMetadata.isDebugBuild
+            ? "\n\n\(AppBuildMetadata.debugAboutDescription)"
+            : ""
         let credits = NSAttributedString(
             string: interfaceText(
-                "GitHub：lalalaladam\n\n致谢原作者：m-inan\n原始项目：github.com/m-inan/mac-translate\n\n本项目是独立重构和扩展版本，未获得原作者官方认可。",
-                "GitHub: lalalaladam\n\nOriginal author: m-inan\nOriginal project: github.com/m-inan/mac-translate\n\nThis is an independent redesign and extension and is not officially endorsed by the original author."
+                "\(debugMetadata)\n\nGitHub：lalalaladam\n\n致谢原作者：m-inan\n原始项目：github.com/m-inan/mac-translate\n\n本项目是独立重构和扩展版本，未获得原作者官方认可。",
+                "\(debugMetadata)\n\nGitHub: lalalaladam\n\nOriginal author: m-inan\nOriginal project: github.com/m-inan/mac-translate\n\nThis is an independent redesign and extension and is not officially endorsed by the original author."
             ),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 12),

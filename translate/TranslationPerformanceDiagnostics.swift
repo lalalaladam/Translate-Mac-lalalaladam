@@ -7,6 +7,34 @@ import Foundation
 import QuartzCore
 import os
 
+enum AppBuildMetadata {
+    private static let bundle = Bundle.main
+
+    static let marketingVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+    static let buildNumber = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+    static let gitCommit = bundle.object(forInfoDictionaryKey: "TranslateGitCommit") as? String ?? "unknown"
+    static let buildTimestamp = bundle.object(forInfoDictionaryKey: "TranslateBuildTimestamp") as? String ?? "unknown"
+    static let debugIdentifier = bundle.object(forInfoDictionaryKey: "TranslateDebugBuildIdentifier") as? String ?? "unknown"
+
+    static var isDebugBuild: Bool {
+        debugIdentifier != "unknown" && !debugIdentifier.isEmpty
+    }
+
+    static var logFields: [String: Any] {
+        [
+            "marketing_version": marketingVersion,
+            "build_number": buildNumber,
+            "git_commit": gitCommit,
+            "build_timestamp": buildTimestamp,
+            "debug_build": debugIdentifier
+        ]
+    }
+
+    static var debugAboutDescription: String {
+        "Version: v\(marketingVersion)\nBuild: \(buildNumber)\nCommit: \(gitCommit)\nBuild Time: \(buildTimestamp)"
+    }
+}
+
 final class TranslationPerformanceDiagnostics {
     static let shared = TranslationPerformanceDiagnostics()
 
@@ -67,7 +95,7 @@ final class TranslationPerformanceDiagnostics {
                         return
                     }
                 }
-                appendRecord([
+                var startupRecord: [String: Any] = [
                     "timestamp": Self.timestamp(),
                     "run_id": runID,
                     "request_id": 0,
@@ -78,7 +106,9 @@ final class TranslationPerformanceDiagnostics {
                     "text_utf16": 0,
                     "direction": "none",
                     "status": "ready"
-                ])
+                ]
+                startupRecord.merge(AppBuildMetadata.logFields) { _, new in new }
+                appendRecord(startupRecord)
             } catch {
                 reportWriteFailure("Unable to initialize performance diagnostics: \(error.localizedDescription)")
             }
