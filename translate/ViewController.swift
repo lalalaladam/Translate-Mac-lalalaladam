@@ -40,6 +40,7 @@ private func logTextPipelineSnapshot(_ stage: String, _ text: String?) {}
 /// string directly keeps very large pastes on the standard NSTextView path.
 private final class TranslationSourceTextView: NSTextView {
     private var hasPendingImmediatePaste = false
+    var onPasteReceived: ((String?) -> Void)?
 
     func consumeImmediatePasteFlag() -> Bool {
         let pending = hasPendingImmediatePaste
@@ -49,9 +50,11 @@ private final class TranslationSourceTextView: NSTextView {
 
     override func paste(_ sender: Any?) {
         hasPendingImmediatePaste = true
+        let pasteboardText = NSPasteboard.general.string(forType: .string)
+        onPasteReceived?(pasteboardText)
         logTextPipelineSnapshot(
             "1-nspasteboard-raw-string",
-            NSPasteboard.general.string(forType: .string)
+            pasteboardText
         )
         if let text = PlainTextPasteboardReader.read(from: .general) {
             logTextPipelineSnapshot("2-plain-text-reader-output", text)
@@ -1493,7 +1496,16 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         translationPipelineLogger.info(
             "[TranslationTiming][coordinator][request=\(resolvedRequestID, privacy: .public)][session=\(resolvedSession, privacy: .public)] milestone=\(milestone, privacy: .public) chars=\(characterCount, privacy: .public) direction=\(direction, privacy: .public)"
         )
-        guard resolvedRequestID > 0 else { return }
+        guard resolvedRequestID > 0 else {
+            let diagnosticSource = source ?? longTextSourceView?.string ?? ""
+            TranslationPerformanceDiagnostics.shared.recordEvent(
+                stage: milestone,
+                characterCount: diagnosticSource.count,
+                utf16Count: diagnosticSource.utf16.count,
+                direction: direction
+            )
+            return
+        }
         let terminalStatus: String?
         switch milestone {
         case "request-invalidated-by-new-input":
@@ -2590,6 +2602,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
     private func makeLongTextView(editable: Bool) -> NSTextView {
         let view: NSTextView = editable ? TranslationSourceTextView() : NSTextView()
+        if let sourceView = view as? TranslationSourceTextView {
+            sourceView.onPasteReceived = { [weak self] text in
+                self?.logTranslationCoordinator("native-paste-received", source: text)
+            }
+        }
         view.isEditable = editable
         view.isSelectable = true
         view.isRichText = false
@@ -4678,13 +4695,28 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         let submit = { [weak self] in
             guard let self else { return }
             self.longTextDebounceWorkItem = nil
-            guard inputGeneration == self.translationInputGeneration,
-                  !self.languageSwapInProgress,
-                  scheduledSourceLanguage == self.currentSourceLanguage,
-                  scheduledTargetLanguage == self.currentTargetLanguage,
-                  self.longTextSourceView?.hasMarkedText() != true,
-                  self.longTextSourceView?.string == source,
-                  self.longTextSource == source else {
+            let skipReason: String?
+            if inputGeneration != self.translationInputGeneration {
+                skipReason = "input-generation-changed"
+            } else if self.languageSwapInProgress {
+                skipReason = "language-swap-in-progress"
+            } else if scheduledSourceLanguage != self.currentSourceLanguage ||
+                        scheduledTargetLanguage != self.currentTargetLanguage {
+                skipReason = "language-changed"
+            } else if self.longTextSourceView?.hasMarkedText() == true {
+                skipReason = "marked-text-active"
+            } else if self.longTextSourceView?.string != source {
+                skipReason = "native-source-mismatch"
+            } else if self.longTextSource != source {
+                skipReason = "tracked-source-mismatch"
+            } else {
+                skipReason = nil
+            }
+            if let skipReason {
+                self.logTranslationCoordinator(
+                    "translation-submission-skipped-\(skipReason)",
+                    source: source
+                )
                 return
             }
             if mode == .debouncedNativeInput {
@@ -5786,13 +5818,17 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
     private func swapCurrentTranslationLanguages() {
         guard longTextSourceView?.hasMarkedText() != true else {
+            logTranslationCoordinator("language-swap-skipped-marked-text")
             logInputMethodTiming("language-swap-skipped-marked-text")
             return
         }
         // Google cannot meaningfully swap an automatically detected source.
         // For all explicit pairs, exchange only the active session languages;
         // the persistent defaults in the menu remain untouched.
-        guard currentSourceLanguage != .automatic else { return }
+        guard currentSourceLanguage != .automatic else {
+            logTranslationCoordinator("language-swap-skipped-automatic-source")
+            return
+        }
 
         // A multi-part translation is only safe to swap after every part has
         // completed. Prefer the current native result pane, which is the
@@ -5807,6 +5843,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 : visibleTranslation
             guard longTextStatusState == .completed,
                   !translationToSwap.isEmpty else {
+                logTranslationCoordinator("language-swap-skipped-incomplete-result")
                 return
             }
             completedTranslation = translationToSwap
@@ -6809,12 +6846,17 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     }
 
     func textDidChange(_ notification: Notification) {
-        guard !isUpdatingNativeWorkspace,
-              let sourceView = longTextSourceView,
-              let changedView = notification.object as? NSTextView,
-              changedView === sourceView else {
+        guard !isUpdatingNativeWorkspace else {
+            logTranslationCoordinator("native-text-change-ignored-workspace-update")
             return
         }
+        guard let sourceView = longTextSourceView,
+              let changedView = notification.object as? NSTextView,
+              changedView === sourceView else {
+            logTranslationCoordinator("native-text-change-ignored-unexpected-view")
+            return
+        }
+        logTranslationCoordinator("native-text-change-received", source: sourceView.string)
         if sourceView.hasMarkedText() {
             logInputMethodTiming("text-did-change-marked-text")
             cancelPendingTranslationDebounce(source: sourceView.string)
@@ -6908,11 +6950,16 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         let previousWithoutTrailingLineBreaks = longTextSource?.trimmingCharacters(in: .newlines)
         if !sourceWithoutTrailingLineBreaks.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            sourceWithoutTrailingLineBreaks == previousWithoutTrailingLineBreaks {
+            logTranslationCoordinator("native-text-change-ignored-formatting-only", source: source)
             return
         }
 
         let isPaste = (sourceView as? TranslationSourceTextView)?
             .consumeImmediatePasteFlag() == true
+        logTranslationCoordinator(
+            isPaste ? "native-paste-submission-queued" : "native-text-submission-queued",
+            source: source
+        )
         queueLongTextTranslation(
             source,
             mode: isPaste ? .immediate : .debouncedNativeInput

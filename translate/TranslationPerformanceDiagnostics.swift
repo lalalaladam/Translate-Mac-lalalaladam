@@ -118,6 +118,32 @@ final class TranslationPerformanceDiagnostics {
         }
     }
 
+    /// Records UI and coordination events that occur before a translation
+    /// request exists (or after its request context has been retired).
+    /// These records intentionally contain only counts, never source text.
+    func recordEvent(
+        stage: String,
+        status: String = "info",
+        characterCount: Int,
+        utf16Count: Int,
+        direction: String
+    ) {
+        queue.async { [self] in
+            appendRecord([
+                "timestamp": Self.timestamp(),
+                "run_id": runID,
+                "request_id": 0,
+                "stage": stage,
+                "elapsed_ms": 0.0,
+                "stage_ms": 0.0,
+                "text_chars": characterCount,
+                "text_utf16": utf16Count,
+                "direction": direction,
+                "status": status
+            ])
+        }
+    }
+
     func finish(requestID: Int, stage: String, status: String) {
         guard requestID > 0 else { return }
         let now = CACurrentMediaTime()
