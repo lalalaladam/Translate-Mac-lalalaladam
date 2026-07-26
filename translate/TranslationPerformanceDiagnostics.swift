@@ -13,6 +13,7 @@ enum AppBuildMetadata {
     static let marketingVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
     static let buildNumber = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
     static let gitCommit = bundle.object(forInfoDictionaryKey: "TranslateGitCommit") as? String ?? "unknown"
+    static let gitWorkingTreeStatus = bundle.object(forInfoDictionaryKey: "TranslateGitWorkingTreeStatus") as? String ?? "unknown"
     static let buildTimestamp = bundle.object(forInfoDictionaryKey: "TranslateBuildTimestamp") as? String ?? "unknown"
     static let debugIdentifier = bundle.object(forInfoDictionaryKey: "TranslateDebugBuildIdentifier") as? String ?? "unknown"
 
@@ -25,13 +26,14 @@ enum AppBuildMetadata {
             "marketing_version": marketingVersion,
             "build_number": buildNumber,
             "git_commit": gitCommit,
+            "git_working_tree_status": gitWorkingTreeStatus,
             "build_timestamp": buildTimestamp,
             "debug_build": debugIdentifier
         ]
     }
 
     static var debugAboutDescription: String {
-        "Version: v\(marketingVersion)\nBuild: \(buildNumber)\nCommit: \(gitCommit)\nBuild Time: \(buildTimestamp)"
+        "Version: v\(marketingVersion)\nBuild: \(buildNumber)\nCommit: \(gitCommit)\nStatus: \(gitWorkingTreeStatus)\nBuild Time: \(buildTimestamp)"
     }
 }
 
@@ -64,6 +66,13 @@ final class TranslationPerformanceDiagnostics {
         let characterCount: Int
         let utf16Count: Int
         let direction: String
+        var firstResultAt: CFTimeInterval?
+        var observerRegisteredCount = 0
+        var observerDisconnectedCount = 0
+        var timerScheduledCount = 0
+        var timerFiredCount = 0
+        var timerCancelledCount = 0
+        var stateTransitionCount = 0
         var isTerminal = false
     }
 
@@ -99,6 +108,7 @@ final class TranslationPerformanceDiagnostics {
                     "timestamp": Self.timestamp(),
                     "run_id": runID,
                     "request_id": 0,
+                    "level": 1,
                     "stage": "diagnostics-started",
                     "elapsed_ms": 0.0,
                     "stage_ms": 0.0,
@@ -148,6 +158,35 @@ final class TranslationPerformanceDiagnostics {
         }
     }
 
+    /// Level 2 state transition record. The optional flags describe runtime
+    /// state only; source and translated text are intentionally never logged.
+    func recordStateTransition(
+        requestID: Int,
+        from: String,
+        to: String,
+        reason: String,
+        markedText: Bool? = nil
+    ) {
+        guard requestID > 0 else { return }
+        let now = CACurrentMediaTime()
+        var extra: [String: Any] = [
+            "from_state": from,
+            "to_state": to,
+            "reason": reason
+        ]
+        if let markedText { extra["marked_text"] = markedText }
+        queue.async { [self] in
+            guard requests[requestID]?.isTerminal == false else { return }
+            write(
+                requestID: requestID,
+                stage: "state-transition",
+                status: "running",
+                at: now,
+                extra: extra
+            )
+        }
+    }
+
     /// Records UI and coordination events that occur before a translation
     /// request exists (or after its request context has been retired).
     /// These records intentionally contain only counts, never source text.
@@ -163,6 +202,7 @@ final class TranslationPerformanceDiagnostics {
                 "timestamp": Self.timestamp(),
                 "run_id": runID,
                 "request_id": 0,
+                "level": Self.level(for: stage),
                 "stage": stage,
                 "elapsed_ms": 0.0,
                 "stage_ms": 0.0,
@@ -180,6 +220,7 @@ final class TranslationPerformanceDiagnostics {
         queue.async { [self] in
             guard requests[requestID]?.isTerminal == false else { return }
             write(requestID: requestID, stage: stage, status: status, at: now)
+            writeSummary(requestID: requestID, terminalStage: stage, terminalStatus: status, at: now)
             requests[requestID]?.isTerminal = true
         }
     }
@@ -188,17 +229,20 @@ final class TranslationPerformanceDiagnostics {
         requestID: Int,
         stage: String,
         status: String,
-        at now: CFTimeInterval
+        at now: CFTimeInterval,
+        extra: [String: Any] = [:]
     ) {
         guard var context = requests[requestID] else { return }
         let elapsed = max(0, (now - context.startedAt) * 1_000)
         let stageDuration = max(0, (now - context.lastEventAt) * 1_000)
         context.lastEventAt = now
+        updateCounters(for: stage, context: &context, at: now)
         requests[requestID] = context
-        appendRecord([
+        var record: [String: Any] = [
             "timestamp": Self.timestamp(),
             "run_id": runID,
             "request_id": requestID,
+            "level": Self.level(for: stage),
             "stage": stage,
             "elapsed_ms": Self.roundedMilliseconds(elapsed),
             "stage_ms": Self.roundedMilliseconds(stageDuration),
@@ -206,7 +250,78 @@ final class TranslationPerformanceDiagnostics {
             "text_utf16": context.utf16Count,
             "direction": context.direction,
             "status": status
-        ])
+        ]
+        extra.forEach { key, value in record[key] = value }
+        appendRecord(record)
+    }
+
+    private func updateCounters(
+        for stage: String,
+        context: inout RequestContext,
+        at now: CFTimeInterval
+    ) {
+        if stage == "first-valid-result-displayed", context.firstResultAt == nil {
+            context.firstResultAt = now
+        }
+        if stage.contains("observer-registered") || stage == "js-observer-ready" {
+            context.observerRegisteredCount += 1
+        }
+        if stage.contains("observer-disconnected") { context.observerDisconnectedCount += 1 }
+        if stage.contains("timer-scheduled") || stage.contains("debounce-scheduled") {
+            context.timerScheduledCount += 1
+        }
+        if stage.contains("timer-fired") || stage.contains("debounce-fired") {
+            context.timerFiredCount += 1
+        }
+        if stage.contains("timer-cancelled") || stage.contains("debounce-cancelled") {
+            context.timerCancelledCount += 1
+        }
+        if stage == "state-transition" { context.stateTransitionCount += 1 }
+    }
+
+    private func writeSummary(
+        requestID: Int,
+        terminalStage: String,
+        terminalStatus: String,
+        at now: CFTimeInterval
+    ) {
+        guard let context = requests[requestID] else { return }
+        let totalElapsed = max(0, (now - context.startedAt) * 1_000)
+        let firstResultElapsed = context.firstResultAt.map {
+            Self.roundedMilliseconds(max(0, ($0 - context.startedAt) * 1_000))
+        }
+        var summary: [String: Any] = [
+            "timestamp": Self.timestamp(),
+            "run_id": runID,
+            "request_id": requestID,
+            "level": 3,
+            "stage": "request-summary",
+            "status": terminalStatus,
+            "terminal_stage": terminalStage,
+            "total_elapsed_ms": Self.roundedMilliseconds(totalElapsed),
+            "text_chars": context.characterCount,
+            "text_utf16": context.utf16Count,
+            "direction": context.direction,
+            "observer_registered_count": context.observerRegisteredCount,
+            "observer_disconnected_count": context.observerDisconnectedCount,
+            "timer_scheduled_count": context.timerScheduledCount,
+            "timer_fired_count": context.timerFiredCount,
+            "timer_cancelled_count": context.timerCancelledCount,
+            "state_transition_count": context.stateTransitionCount
+        ]
+        if let firstResultElapsed { summary["first_result_elapsed_ms"] = firstResultElapsed }
+        summary.merge(AppBuildMetadata.logFields) { _, new in new }
+        appendRecord(summary)
+    }
+
+    private static func level(for stage: String) -> Int {
+        if stage == "state-transition" ||
+            stage.contains("timer") ||
+            stage.contains("observer") ||
+            stage.contains("ime") {
+            return 2
+        }
+        return 1
     }
 
     private func appendRecord(_ record: [String: Any]) {

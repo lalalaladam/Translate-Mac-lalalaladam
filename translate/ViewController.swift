@@ -1464,6 +1464,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             utf16Count: source.utf16.count,
             direction: "\(currentSourceLanguage.rawValue)->\(currentTargetLanguage.rawValue)"
         )
+        logTranslationStateTransition(
+            from: "idle",
+            to: "request-started",
+            reason: "user-trigger"
+        )
         logTranslationTiming("user-trigger", details: "chars=\(source.count) utf16=\(source.utf16.count)")
     }
 
@@ -1480,6 +1485,24 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         TranslationPerformanceDiagnostics.shared.record(
             requestID: request.id,
             stage: milestone
+        )
+    }
+
+    private func logTranslationStateTransition(
+        from: String,
+        to: String,
+        reason: String,
+        markedText: Bool? = nil,
+        requestID: Int? = nil
+    ) {
+        let resolvedRequestID = requestID ?? translationTimingRequest?.id ?? 0
+        guard resolvedRequestID > 0 else { return }
+        TranslationPerformanceDiagnostics.shared.recordStateTransition(
+            requestID: resolvedRequestID,
+            from: from,
+            to: to,
+            reason: reason,
+            markedText: markedText
         )
     }
 
@@ -4633,6 +4656,12 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             """#, completionHandler: nil)
         }
         if hadActiveRequest {
+            logTranslationStateTransition(
+                from: "active",
+                to: "invalidated",
+                reason: "new-input",
+                requestID: invalidatedRequestID
+            )
             logTranslationCoordinator(
                 "observer-disconnected",
                 source: source,
@@ -4746,6 +4775,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     }
 
     private func clearLongTextTranslationForEmptyInput() {
+        logTranslationCoordinator("empty-input-clearing", source: "")
         cancelPendingTranslationDebounce(source: "")
         translationInputGeneration += 1
         invalidateActiveTranslationWork(source: "")
@@ -4813,6 +4843,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         // Keep the app-owned inline workspace in sync when this path is
         // reached from its editable source, without showing a network error.
         updateInlineLongText(source: "", translation: "", status: "")
+        logTranslationCoordinator("empty-input-cleared", source: "")
     }
 
     // Google measures its 5,000-character limit with JavaScript's UTF-16
@@ -5583,6 +5614,16 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         // normal commit notification will enqueue the authoritative source.
         guard !sourceView.hasMarkedText() else {
             logTranslationTiming("result-display-recovery-waiting-for-ime")
+            logTranslationStateTransition(
+                from: "result-display-rejected",
+                to: "waiting-for-ime",
+                reason: reason,
+                markedText: true
+            )
+            // A few input methods finish composition without delivering a
+            // follow-up textDidChange notification. Keep the normal commit
+            // path, but also arm its existing bounded reconciliation check.
+            scheduleIMECompositionEndCheck()
             return
         }
 
@@ -5592,6 +5633,12 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             return
         }
         logTranslationTiming("result-display-recovery-resubmitted")
+        logTranslationStateTransition(
+            from: "result-display-rejected",
+            to: "resubmitting",
+            reason: reason,
+            markedText: false
+        )
         // Defer until the current extraction callback has unwound. The normal
         // queue path invalidates every observer, timer and fallback belonging
         // to this rejected request before submitting the latest native text.
@@ -6859,6 +6906,13 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         logTranslationCoordinator("native-text-change-received", source: sourceView.string)
         if sourceView.hasMarkedText() {
             logInputMethodTiming("text-did-change-marked-text")
+            logTranslationCoordinator("ime-composition-started", source: sourceView.string)
+            logTranslationStateTransition(
+                from: "active",
+                to: "ime-composing",
+                reason: "marked-text-changed",
+                markedText: true
+            )
             cancelPendingTranslationDebounce(source: sourceView.string)
             translationInputGeneration += 1
             invalidateActiveTranslationWork(source: sourceView.string)
@@ -6916,6 +6970,12 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 self.logTranslationCoordinator(
                     "ime-composition-ended-auto-submit",
                     source: source
+                )
+                self.logTranslationStateTransition(
+                    from: "ime-composing",
+                    to: "committed",
+                    reason: "composition-end-check",
+                    markedText: false
                 )
                 self.handleCommittedNativeTextChange(sourceView)
                 return

@@ -20,6 +20,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>TranslateGitCommit</key>
 	<string>$(GIT_COMMIT_HASH)</string>
+	<key>TranslateGitWorkingTreeStatus</key>
+	<string>$(GIT_WORKING_TREE_STATUS)</string>
 	<key>TranslateBuildTimestamp</key>
 	<string>$(BUILD_TIMESTAMP)</string>
 	<key>TranslateDebugBuildIdentifier</key>
