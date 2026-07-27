@@ -14,6 +14,7 @@ PROJECT="$PROJECT_DIR/translate.xcodeproj"
 SCHEME="translate"
 PRODUCT_NAME="Translate"
 VERSION="${1:-}"
+BUILD_NUMBER="$(git -C "$PROJECT_DIR" rev-list --count HEAD)"
 
 # Prefer the full Xcode installation over CommandLineTools when available.
 if [[ -z "${DEVELOPER_DIR:-}" ]]; then
@@ -71,7 +72,7 @@ echo "==> Archive Release $VERSION"
     -archivePath "$ARCHIVE_PATH" \
     -derivedDataPath "$RELEASE_ROOT/derived-data" \
     MARKETING_VERSION="$VERSION" \
-    CURRENT_PROJECT_VERSION=1 \
+    CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
     archive
