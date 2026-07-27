@@ -23,9 +23,16 @@ private let inputMethodTimingLogger = Logger(
     category: "InputMethodTiming"
 )
 
+private let sentenceAlignmentLogger = Logger(
+    subsystem: "com.lalalaladam.translate",
+    category: "SentenceAlignment"
+)
+
 #if DEBUG
 private func logTextPipelineSnapshot(_ stage: String, _ text: String?) {
-    let value = text ?? "<nil>"
+    // Never write the private alignment transport protocol to a debug log.
+    // This helper is also used for the WebView textarea acknowledgement.
+    let value = AlignmentTransport.visible(text ?? "<nil>")
     let containsSup = value.localizedCaseInsensitiveContains("<sup")
     translationPipelineLogger.info(
         "TextSnapshot stage=\(stage, privacy: .public) chars=\(value.count, privacy: .public) containsSup=\(containsSup, privacy: .public)"
@@ -38,7 +45,52 @@ private func logTextPipelineSnapshot(_ stage: String, _ text: String?) {}
 /// A deliberately plain-text editor for the app-owned source pane.  It does
 /// not depend on WebKit's 5,000-character field, and inserting the pasteboard
 /// string directly keeps very large pastes on the standard NSTextView path.
-private final class TranslationSourceTextView: NSTextView {
+/// An NSTextView that reports the character currently under the pointer.  The
+/// reporting is deliberately local to AppKit: it never forwards pointer
+/// events to the hidden Google Translate page, so alignment affordances cannot
+/// affect the translation service's input or rendering latency.
+private class TranslationAlignmentTextView: NSTextView {
+    var onAlignmentPointerChange: ((Int?) -> Void)?
+    private var alignmentTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let alignmentTrackingArea {
+            removeTrackingArea(alignmentTrackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .inVisibleRect, .activeAlways],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        alignmentTrackingArea = trackingArea
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        guard let layoutManager, let textContainer else {
+            onAlignmentPointerChange?(nil)
+            return
+        }
+        let characterIndex = layoutManager.characterIndex(
+            for: point,
+            in: textContainer,
+            fractionOfDistanceBetweenInsertionPoints: nil
+        )
+        let length = (string as NSString).length
+        onAlignmentPointerChange?(characterIndex < length ? characterIndex : nil)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        onAlignmentPointerChange?(nil)
+    }
+}
+
+private final class TranslationSourceTextView: TranslationAlignmentTextView {
     private var hasPendingImmediatePaste = false
     var onPasteReceived: ((String?) -> Void)?
 
@@ -65,6 +117,73 @@ private final class TranslationSourceTextView: NSTextView {
     }
 }
 
+private final class TranslationResultTextView: TranslationAlignmentTextView {}
+
+private struct SentenceAlignment: Equatable {
+    let sourceRange: NSRange
+    let translationRange: NSRange
+}
+
+
+/// Fast, presentation-only sentence pairing for the native workspace. Google
+/// supplies the translated text; pairing is calculated only after that text
+/// has settled, outside the request path. Keeping ranges in UTF-16 makes them
+/// directly usable by NSTextView without repeatedly converting Swift indices.
+private enum SentenceAlignmentBuilder {
+    static func make(source: String, translation: String) -> [SentenceAlignment] {
+        let sourceRanges = sentenceRanges(in: source)
+        let translationRanges = sentenceRanges(in: translation)
+        guard !sourceRanges.isEmpty, !translationRanges.isEmpty else { return [] }
+        // Pair against the larger side rather than iterating source ranges
+        // only. The former left unmatched translated sentences when a target
+        // language split one source sentence into several sentences.
+        return (0..<max(sourceRanges.count, translationRanges.count)).map { index in
+            let sourceIndex = sourceRanges.count >= translationRanges.count
+                ? index
+                : Int((Double(index) / Double(translationRanges.count)) * Double(sourceRanges.count))
+            let targetIndex = translationRanges.count >= sourceRanges.count
+                ? index
+                : Int((Double(index) / Double(sourceRanges.count)) * Double(translationRanges.count))
+            return SentenceAlignment(
+                sourceRange: sourceRanges[sourceIndex],
+                translationRange: translationRanges[targetIndex]
+            )
+        }
+    }
+
+
+    private static func sentenceRanges(in text: String) -> [NSRange] {
+        let value = text as NSString
+        let terminators = CharacterSet(charactersIn: ".!?。！？\n")
+        var ranges: [NSRange] = []
+        var start = 0
+        for index in 0..<value.length {
+            let scalar = value.substring(with: NSRange(location: index, length: 1)).unicodeScalars.first
+            if scalar.map({ terminators.contains($0) }) == true {
+                appendTrimmedRange(in: value, start: start, end: index + 1, to: &ranges)
+                start = index + 1
+            }
+        }
+        appendTrimmedRange(in: value, start: start, end: value.length, to: &ranges)
+        return ranges
+    }
+
+    private static func appendTrimmedRange(
+        in value: NSString,
+        start: Int,
+        end: Int,
+        to ranges: inout [NSRange]
+    ) {
+        guard end > start else { return }
+        let raw = value.substring(with: NSRange(location: start, length: end - start))
+        let leading = String(raw.prefix { $0.isWhitespace }).utf16.count
+        let trailing = String(raw.reversed().prefix { $0.isWhitespace }).utf16.count
+        let length = raw.utf16.count - leading - trailing
+        guard length > 0 else { return }
+        ranges.append(NSRange(location: start + leading, length: length))
+    }
+}
+
 private enum TranslationServiceTextNormalizer {
     private static let citationSuperscriptExpression = try? NSRegularExpression(
         pattern: #"(?i)<sup(?:\s+[^<>]*)?>([0-9\s,;\-–—]+)</sup\s*>"#
@@ -77,14 +196,14 @@ private enum TranslationServiceTextNormalizer {
         // the submitted source did not itself contain a sup tag.
         guard source.range(of: "<sup", options: .caseInsensitive) == nil,
               let expression = citationSuperscriptExpression else {
-            return translation
+            return AlignmentTransport.visible(translation)
         }
         let range = NSRange(translation.startIndex..., in: translation)
-        return expression.stringByReplacingMatches(
+        return AlignmentTransport.visible(expression.stringByReplacingMatches(
             in: translation,
             range: range,
             withTemplate: "$1"
-        )
+        ))
     }
 }
 
@@ -179,6 +298,70 @@ private enum PlainTextPasteboardReader {
 private struct TranslationChunk {
     let text: String
     let separatorAfter: String
+    let sourceUTF16Offset: Int
+
+    init(text: String, separatorAfter: String, sourceUTF16Offset: Int = 0) {
+        self.text = text
+        self.separatorAfter = separatorAfter
+        self.sourceUTF16Offset = sourceUTF16Offset
+    }
+}
+
+private enum AlignmentTransport {
+    // Kept out of every user-visible string. Deliberately ASCII and
+    // self-validating: zero-width markers are routinely normalized away.
+    static func marked(_ text: String) -> String {
+        var result = ""
+        var index = 0
+        var start = text.startIndex
+        for position in text.indices where ".!?。！？\n".contains(text[position]) {
+            result += "[[[MTSEG_\(index)]]]" + text[start...position]
+            index += 1; start = text.index(after: position)
+        }
+        if start < text.endIndex { result += "[[[MTSEG_\(index)]]]" + text[start...] }
+        return result
+    }
+    static func visible(_ text: String) -> String {
+        text.replacingOccurrences(of: #"\[\[\[MTSEG_[0-9]+\]\]\]"#, with: "", options: .regularExpression)
+    }
+
+    static func decoded(source: String, translation: String) -> (ranges: [SentenceAlignment], failure: String?) {
+        let marker = try? NSRegularExpression(pattern: #"\[\[\[MTSEG_([0-9]+)\]\]\]"#)
+        guard let marker else { return ([], "marker-regex-unavailable") }
+        let sourceMatches = marker.matches(in: source, range: NSRange(source.startIndex..., in: source))
+        let targetMatches = marker.matches(in: translation, range: NSRange(translation.startIndex..., in: translation))
+        guard !sourceMatches.isEmpty else { return ([], "source-markers-missing") }
+        guard sourceMatches.count == targetMatches.count else {
+            return ([], "marker-count-mismatch-source-\(sourceMatches.count)-target-\(targetMatches.count)")
+        }
+        for index in sourceMatches.indices {
+            let sourceID = (source as NSString).substring(with: sourceMatches[index].range(at: 1))
+            let targetID = (translation as NSString).substring(with: targetMatches[index].range(at: 1))
+            guard sourceID == targetID else {
+                return ([], "marker-order-mismatch-at-\(index)-source-\(sourceID)-target-\(targetID)")
+            }
+        }
+        let sourceText = source as NSString; let targetText = translation as NSString
+        let ranges: [SentenceAlignment] = sourceMatches.indices.compactMap { sourceIndex in
+            let targetIndex = sourceIndex
+            let nextSource = sourceIndex + 1 < sourceMatches.count ? sourceMatches[sourceIndex + 1].range.location : sourceText.length
+            let nextTarget = targetIndex + 1 < targetMatches.count ? targetMatches[targetIndex + 1].range.location : targetText.length
+            let sourceStart = NSMaxRange(sourceMatches[sourceIndex].range)
+            let targetStart = NSMaxRange(targetMatches[targetIndex].range)
+            guard nextSource > sourceStart, nextTarget > targetStart else { return nil }
+            let removedSourceBefore = sourceMatches.prefix(sourceIndex + 1).reduce(0) { $0 + $1.range.length }
+            let removedTargetBefore = targetMatches.prefix(targetIndex + 1).reduce(0) { $0 + $1.range.length }
+            return SentenceAlignment(sourceRange: NSRange(location: sourceStart - removedSourceBefore, length: nextSource - sourceStart), translationRange: NSRange(location: targetStart - removedTargetBefore, length: nextTarget - targetStart))
+        }
+        guard !ranges.isEmpty else { return ([], "marker-ranges-empty") }
+        return (ranges, nil)
+    }
+}
+
+private struct AlignmentTransportResult {
+    let visibleText: String
+    let ranges: [SentenceAlignment]
+    let markerFailure: String?
 }
 
 private enum TranslationSubmissionMode {
@@ -1279,6 +1462,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var longTextOverlay: NSView?
     private var longTextSourceView: NSTextView?
     private var longTextTranslationView: NSTextView?
+    private var sentenceAlignments: [SentenceAlignment] = []
+    private var displayedAlignment: SentenceAlignment?
+    private var displayedAlignmentWasSourceHover: Bool?
+    private var sentenceAlignmentGeneration = 0
     private var longTextStatusLabel: NSTextField?
     private var longTextSourceLabel: NSTextField?
     private var longTextTranslationLabel: NSTextField?
@@ -1330,7 +1517,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     // parallel, while the API can; results remain ordered before display.
     private var longTextUsesConcurrentAPIBatch = false
     private var longTextConcurrentAPITasks: [Int: URLSessionDataTask] = [:]
-    private var longTextConcurrentAPIResults: [Int: String] = [:]
+    private var longTextConcurrentAPIResults: [Int: AlignmentTransportResult] = [:]
     private var longTextConcurrentAPIRetryCounts: [Int: Int] = [:]
     private var longTextSession = 0
     private var longTextPollAttempts = 0
@@ -1349,6 +1536,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var longTextWebHasValidCandidate = false
     private var longTextProvisionalFallbackStarted = false
     private var longTextProvisionalFallbackTranslation: String?
+    // Marker-derived pairs are stored only as visible UTF-16 ranges. Neither
+    // the temporary transport markers nor the raw service response can reach
+    // NSTextView, copy, speech, undo, or the persistent diagnostics.
+    private var longTextMarkerAlignments: [SentenceAlignment] = []
     private var longTextFallbackShouldFinalize = false
     private var longTextStatusState: LongTextStatusState = .idle
     private var longTextSourceLanguage = TranslateLanguagePreferences.source.rawValue
@@ -2416,6 +2607,12 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         let sourceView = makeLongTextView(editable: true)
         sourceView.delegate = self
         let translationView = makeLongTextView(editable: false)
+        (sourceView as? TranslationAlignmentTextView)?.onAlignmentPointerChange = { [weak self] index in
+            self?.updateSentenceAlignmentHighlight(at: index, inSource: true)
+        }
+        (translationView as? TranslationAlignmentTextView)?.onAlignmentPointerChange = { [weak self] index in
+            self?.updateSentenceAlignmentHighlight(at: index, inSource: false)
+        }
         let sourceScroll = makeLongTextScrollView(with: sourceView)
         let translationScroll = makeLongTextScrollView(with: translationView)
         let (sourcePronunciationRow, sourcePronunciationLabel) = makePronunciationRow()
@@ -2624,7 +2821,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     }
 
     private func makeLongTextView(editable: Bool) -> NSTextView {
-        let view: NSTextView = editable ? TranslationSourceTextView() : NSTextView()
+        let view: NSTextView = editable ? TranslationSourceTextView() : TranslationResultTextView()
         if let sourceView = view as? TranslationSourceTextView {
             sourceView.onPasteReceived = { [weak self] text in
                 self?.logTranslationCoordinator("native-paste-received", source: text)
@@ -2739,6 +2936,274 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 range: NSRange(location: 0, length: (view.string as NSString).length)
             )
         }
+    }
+
+    /// Rebuild alignment after a stable result only. The calculation runs off
+    /// the main queue, so even multi-page texts do not compete with Google's
+    /// WebView request, polling, or first-result presentation.
+    private func rebuildSentenceAlignment(
+        source: String,
+        translation: String,
+        preferredAlignments: [SentenceAlignment] = []
+    ) {
+        sentenceAlignmentGeneration += 1
+        let generation = sentenceAlignmentGeneration
+        let startedAt = CACurrentMediaTime()
+        clearSentenceAlignmentHighlight()
+        sentenceAlignments = []
+        guard !source.isEmpty, !translation.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let fallbackAlignments = SentenceAlignmentBuilder.make(
+                source: source,
+                translation: translation
+            )
+            let markerSourceRanges = preferredAlignments.map(\.sourceRange)
+            let alignments = (fallbackAlignments.filter { fallback in
+                !markerSourceRanges.contains { NSIntersectionRange(fallback.sourceRange, $0).length > 0 }
+            } + preferredAlignments).sorted { lhs, rhs in
+                lhs.sourceRange.location == rhs.sourceRange.location
+                    ? lhs.translationRange.location < rhs.translationRange.location
+                    : lhs.sourceRange.location < rhs.sourceRange.location
+            }
+            DispatchQueue.main.async {
+                guard let self,
+                      generation == self.sentenceAlignmentGeneration,
+                      self.longTextSourceView?.string == source,
+                      self.longTextTranslationView?.string == translation else {
+                    return
+                }
+                self.sentenceAlignments = alignments
+                self.recordSentenceAlignmentEvent(
+                    stage: "sentence-alignment-built",
+                    source: source,
+                    translation: translation,
+                    extra: [
+                        "pair_count": alignments.count,
+                        "marker_pair_count": preferredAlignments.count,
+                        "build_ms": ((CACurrentMediaTime() - startedAt) * 1_000).rounded()
+                    ]
+                )
+                self.refineSentenceAlignmentFromGoogleWebPage(
+                    source: source,
+                    translation: translation,
+                    generation: generation
+                )
+            }
+        }
+    }
+
+    /// Reads only range metadata exposed by the already-loaded Google
+    /// Translate page. This deliberately does not call a second translation
+    /// endpoint: webpage metadata is the sole preferred alignment source.
+    private func refineSentenceAlignmentFromGoogleWebPage(
+        source: String,
+        translation: String,
+        generation: Int
+    ) {
+        guard let webView = activeTranslationWebView else { return }
+        webView.evaluateJavaScript(#"""
+            (() => {
+                const root = document.querySelector('.QcsUad');
+                const keys = ['sourceStart', 'sourceEnd', 'targetStart', 'targetEnd'];
+                const pairs = root ? Array.from(root.querySelectorAll('*')).map((element) => {
+                    const data = element.dataset || {};
+                    if (!keys.every((key) => data[key] !== undefined)) return null;
+                    return keys.map((key) => Number(data[key]));
+                }).filter((pair) => pair && pair.every(Number.isFinite)) : [];
+                return { pairs, resultElements: root ? root.querySelectorAll('*').length : 0 };
+            })();
+        """#) { [weak self] result, _ in
+            guard let self,
+                  generation == self.sentenceAlignmentGeneration,
+                  self.longTextSourceView?.string == source,
+                  self.longTextTranslationView?.string == translation else { return }
+            let payload = result as? [String: Any]
+            let rawPairs = payload?["pairs"] as? [[Any]] ?? []
+            let pairs = rawPairs.compactMap { values -> SentenceAlignment? in
+                guard values.count == 4,
+                      let sourceStart = values[0] as? NSNumber,
+                      let sourceEnd = values[1] as? NSNumber,
+                      let targetStart = values[2] as? NSNumber,
+                      let targetEnd = values[3] as? NSNumber else { return nil }
+                let sourceRange = NSRange(location: sourceStart.intValue, length: sourceEnd.intValue - sourceStart.intValue)
+                let targetRange = NSRange(location: targetStart.intValue, length: targetEnd.intValue - targetStart.intValue)
+                guard sourceRange.location >= 0, targetRange.location >= 0,
+                      NSMaxRange(sourceRange) <= source.utf16.count,
+                      NSMaxRange(targetRange) <= translation.utf16.count else { return nil }
+                return SentenceAlignment(sourceRange: sourceRange, translationRange: targetRange)
+            }
+            guard !pairs.isEmpty else {
+                self.recordSentenceAlignmentEvent(stage: "sentence-alignment-web-metadata-unavailable", source: source, translation: translation, extra: ["web_result_element_count": payload?["resultElements"] as? Int ?? 0])
+                return
+            }
+            self.sentenceAlignments = pairs
+            self.recordSentenceAlignmentEvent(stage: "sentence-alignment-refined-web-metadata", source: source, translation: translation, extra: ["web_pair_count": pairs.count])
+        }
+    }
+
+    private static func alignmentCoveragePercent(covered: Int, total: Int) -> Double {
+        guard total > 0 else { return 0 }
+        return (Double(covered) / Double(total) * 100).rounded()
+    }
+
+    private func clearSentenceAlignmentHighlight() {
+        displayedAlignment = nil
+        displayedAlignmentWasSourceHover = nil
+        for view in [longTextSourceView, longTextTranslationView] {
+            guard let view, let layoutManager = view.layoutManager else { continue }
+            layoutManager.removeTemporaryAttribute(
+                .backgroundColor,
+                forCharacterRange: NSRange(location: 0, length: (view.string as NSString).length)
+            )
+        }
+    }
+
+    private func updateSentenceAlignmentHighlight(at index: Int?, inSource: Bool) {
+        guard let index else {
+            clearSentenceAlignmentHighlight()
+            return
+        }
+        let directAlignment = sentenceAlignments.first {
+            NSLocationInRange(index, inSource ? $0.sourceRange : $0.translationRange)
+        }
+        // Sentence boundaries intentionally exclude whitespace and
+        // punctuation. Do not make those gaps dead zones: use the nearest
+        // paired segment so every visible word and adjacent punctuation has a
+        // response while preserving the closest available correspondence.
+        let alignment = directAlignment ?? nearestSentenceAlignment(
+            to: index,
+            inSource: inSource
+        )
+        guard alignment != displayedAlignment || displayedAlignmentWasSourceHover != inSource else { return }
+        clearSentenceAlignmentHighlight()
+        guard let alignment else {
+            recordSentenceAlignmentEvent(
+                stage: "sentence-alignment-hover-miss",
+                source: longTextSourceView?.string ?? "",
+                translation: longTextTranslationView?.string ?? "",
+                extra: ["hover_side": inSource ? "source" : "translation"]
+            )
+            return
+        }
+        displayedAlignment = alignment
+        displayedAlignmentWasSourceHover = inSource
+        let hoveredView = inSource ? longTextSourceView : longTextTranslationView
+        let hoveredRange = wordRange(around: index, in: hoveredView?.string ?? "")
+            ?? (inSource ? alignment.sourceRange : alignment.translationRange)
+        applyAlignmentHighlight(
+            to: longTextSourceView,
+            range: inSource ? hoveredRange : alignment.sourceRange
+        )
+        applyAlignmentHighlight(
+            to: longTextTranslationView,
+            range: inSource ? alignment.translationRange : hoveredRange
+        )
+        scrollAlignedCounterpartIntoView(alignment, hoveredSource: inSource)
+        recordSentenceAlignmentEvent(
+            stage: "sentence-alignment-hover-hit",
+            source: longTextSourceView?.string ?? "",
+            translation: longTextTranslationView?.string ?? "",
+            extra: [
+                "hover_side": inSource ? "source" : "translation",
+                "selection_mode": directAlignment == nil ? "nearest-fallback" : "direct",
+                "hover_is_word": wordRange(around: index, in: hoveredView?.string ?? "") != nil,
+                "source_range_start": alignment.sourceRange.location,
+                "source_range_length": alignment.sourceRange.length,
+                "translation_range_start": alignment.translationRange.location,
+                "translation_range_length": alignment.translationRange.length
+            ]
+        )
+    }
+
+    private func nearestSentenceAlignment(
+        to index: Int,
+        inSource: Bool
+    ) -> SentenceAlignment? {
+        sentenceAlignments.min { lhs, rhs in
+            let leftRange = inSource ? lhs.sourceRange : lhs.translationRange
+            let rightRange = inSource ? rhs.sourceRange : rhs.translationRange
+            let leftDistance = min(abs(index - leftRange.location), abs(index - NSMaxRange(leftRange)))
+            let rightDistance = min(abs(index - rightRange.location), abs(index - NSMaxRange(rightRange)))
+            return leftDistance < rightDistance
+        }
+    }
+
+    private func applyAlignmentHighlight(to view: NSTextView?, range: NSRange) {
+        guard let view, let layoutManager = view.layoutManager,
+              range.location != NSNotFound, range.length > 0 else { return }
+        // Low-contrast, system-friendly tints: a cool graphite blue in dark
+        // mode and a muted indigo wash in light mode. They retain readable
+        // text on the workspace material without reproducing Google's blue.
+        let color = isDarkMode
+            ? NSColor(calibratedRed: 0.34, green: 0.39, blue: 0.48, alpha: 0.46)
+            : NSColor(calibratedRed: 0.52, green: 0.58, blue: 0.74, alpha: 0.24)
+        layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: range)
+    }
+
+    private func scrollAlignedCounterpartIntoView(
+        _ alignment: SentenceAlignment,
+        hoveredSource: Bool
+    ) {
+        let counterpart = hoveredSource ? longTextTranslationView : longTextSourceView
+        let range = hoveredSource ? alignment.translationRange : alignment.sourceRange
+        guard let counterpart else { return }
+        // NSTextView performs the smallest useful scroll. This keeps the
+        // hovered pane still while guaranteeing its paired sentence is visible.
+        counterpart.scrollRangeToVisible(range)
+        recordSentenceAlignmentEvent(
+            stage: "sentence-alignment-counterpart-scrolled",
+            source: longTextSourceView?.string ?? "",
+            translation: longTextTranslationView?.string ?? "",
+            extra: [
+                "from_side": hoveredSource ? "source" : "translation",
+                "counterpart_range_length": range.length
+            ]
+        )
+    }
+
+    private func recordSentenceAlignmentEvent(
+        stage: String,
+        source: String,
+        translation: String,
+        extra: [String: Any]
+    ) {
+#if DEBUG
+        sentenceAlignmentLogger.debug("\(stage, privacy: .public) sourceChars=\(source.count, privacy: .public) translationChars=\(translation.count, privacy: .public)")
+        TranslationPerformanceDiagnostics.shared.recordEvent(
+            stage: stage,
+            characterCount: source.count + translation.count,
+            utf16Count: source.utf16.count + translation.utf16.count,
+            direction: "\(longTextSourceLanguage)-\(longTextTargetLanguage)",
+            extra: extra
+        )
+#endif
+    }
+
+    private func wordRange(around index: Int, in text: String) -> NSRange? {
+        let value = text as NSString
+        guard index >= 0, index < value.length else { return nil }
+        let characterRange = value.rangeOfComposedCharacterSequence(at: index)
+        let character = value.substring(with: characterRange)
+        guard character.unicodeScalars.allSatisfy({
+            CharacterSet.alphanumerics.contains($0)
+        }) else {
+            return nil
+        }
+        var start = characterRange.location
+        var end = NSMaxRange(characterRange)
+        while start > 0 {
+            let previous = value.rangeOfComposedCharacterSequence(at: start - 1)
+            let part = value.substring(with: previous)
+            guard part.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }) else { break }
+            start = previous.location
+        }
+        while end < value.length {
+            let next = value.rangeOfComposedCharacterSequence(at: end)
+            let part = value.substring(with: next)
+            guard part.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }) else { break }
+            end = NSMaxRange(next)
+        }
+        return NSRange(location: start, length: end - start)
     }
 
     private func showConnectionOverlay(waitingForNetwork: Bool) {
@@ -4444,6 +4909,12 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextSession += 1
         updateTranslationTimingSession(longTextSession)
         longTextSource = source
+        // The previous result can remain visible during a refresh, but its
+        // alignment belongs to an older source snapshot and must not be
+        // interactive while the new request is in flight.
+        sentenceAlignmentGeneration += 1
+        sentenceAlignments = []
+        clearSentenceAlignmentHighlight()
         longTextReplacesVisibleTranslation = keepsCompatibleVisibleResult
         longTextFormattingOnlyRefresh = formattingOnlyRefresh
         longTextTranslation = keepsCompatibleVisibleResult ? longTextCompletedTranslation : ""
@@ -4452,6 +4923,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextUsesConcurrentAPIBatch = chunks.count >= concurrentAPIChunkThreshold
         longTextConcurrentAPIResults = [:]
         longTextConcurrentAPIRetryCounts = [:]
+        longTextMarkerAlignments = []
         longTextPollAttempts = 0
         longTextLastWebTranslation = nil
         longTextCandidateTranslation = nil
@@ -4625,6 +5097,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextUsesConcurrentAPIBatch = false
         longTextConcurrentAPIResults = [:]
         longTextConcurrentAPIRetryCounts = [:]
+        longTextMarkerAlignments = []
 
         if longTextScheduledPoll != nil {
             longTextScheduledPoll?.cancel()
@@ -4794,6 +5267,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextConcurrentAPITasks = [:]
         longTextConcurrentAPIResults = [:]
         longTextConcurrentAPIRetryCounts = [:]
+        longTextMarkerAlignments = []
         longTextPollAttempts = 0
         longTextLastWebTranslation = nil
         longTextCandidateTranslation = nil
@@ -4855,6 +5329,61 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         text.components(separatedBy: .newlines).joined()
     }
 
+    private func alignmentTransportResult(
+        rawTranslation: String,
+        sourceChunk: String
+    ) -> AlignmentTransportResult {
+        let markedSource = AlignmentTransport.marked(sourceChunk)
+        let decoded = AlignmentTransport.decoded(
+            source: markedSource,
+            translation: rawTranslation
+        )
+        let visibleText = TranslationServiceTextNormalizer.normalize(
+            rawTranslation,
+            forSource: sourceChunk
+        )
+        if let failure = decoded.failure {
+            recordSentenceAlignmentEvent(
+                stage: "sentence-alignment-marker-rejected",
+                source: sourceChunk,
+                translation: visibleText,
+                extra: ["reason": failure]
+            )
+        } else {
+            recordSentenceAlignmentEvent(
+                stage: "sentence-alignment-marker-accepted",
+                source: sourceChunk,
+                translation: visibleText,
+                extra: ["pair_count": decoded.ranges.count]
+            )
+        }
+        return AlignmentTransportResult(
+            visibleText: visibleText,
+            ranges: decoded.ranges,
+            markerFailure: decoded.failure
+        )
+    }
+
+    private func addMarkerAlignments(
+        _ result: AlignmentTransportResult,
+        for chunk: TranslationChunk,
+        translationUTF16Offset: Int
+    ) {
+        guard !result.ranges.isEmpty else { return }
+        longTextMarkerAlignments.append(contentsOf: result.ranges.map { range in
+            SentenceAlignment(
+                sourceRange: NSRange(
+                    location: chunk.sourceUTF16Offset + range.sourceRange.location,
+                    length: range.sourceRange.length
+                ),
+                translationRange: NSRange(
+                    location: translationUTF16Offset + range.translationRange.location,
+                    length: range.translationRange.length
+                )
+            )
+        })
+    }
+
     private func splitLongText(_ text: String) -> [TranslationChunk] {
         var chunks: [TranslationChunk] = []
         var start = text.startIndex
@@ -4870,6 +5399,13 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 }
                 utf16Count += characterUTF16Count
                 maximumEnd = next
+            }
+            // The marker protocol adds a small ASCII header per sentence.
+            // Keep the submitted UTF-16 payload below Google's limit even
+            // for a document with unusually many short lines.
+            while maximumEnd > start &&
+                AlignmentTransport.marked(String(text[start..<maximumEnd])).utf16.count > googleWebChunkUTF16Limit {
+                maximumEnd = text.index(before: maximumEnd)
             }
             if maximumEnd == text.endIndex {
                 chunks.append(TranslationChunk(
@@ -4934,7 +5470,15 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             }
         }
 
-        return chunks.filter { !$0.text.isEmpty || !$0.separatorAfter.isEmpty }
+        var sourceOffset = 0
+        return chunks.filter { !$0.text.isEmpty || !$0.separatorAfter.isEmpty }.map { chunk in
+            defer { sourceOffset += chunk.text.utf16.count + chunk.separatorAfter.utf16.count }
+            return TranslationChunk(
+                text: chunk.text,
+                separatorAfter: chunk.separatorAfter,
+                sourceUTF16Offset: sourceOffset
+            )
+        }
     }
 
     private func translateNextLongTextChunk(session: Int) {
@@ -4978,6 +5522,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             longTextFormattingOnlyRefresh = false
             updateInlineLongText(source: nil, translation: longTextTranslation, status: status)
             updateLongTextLabels()
+            self.rebuildSentenceAlignment(
+                source: longTextSource ?? "",
+                translation: completedTranslation,
+                preferredAlignments: longTextMarkerAlignments
+            )
             return
         }
 
@@ -5037,7 +5586,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         logTranslationTiming("parallel-api-batch-started")
         for (index, chunk) in longTextChunks.enumerated() {
             if chunk.text.isEmpty {
-                longTextConcurrentAPIResults[index] = ""
+                longTextConcurrentAPIResults[index] = AlignmentTransportResult(
+                    visibleText: "",
+                    ranges: [],
+                    markerFailure: nil
+                )
             } else {
                 translateConcurrentLongTextChunkUsingAPI(
                     chunk.text,
@@ -5056,15 +5609,15 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     ) {
         guard session == longTextSession,
               longTextUsesConcurrentAPIBatch,
-              let request = googleTranslationRequest(for: chunk) else {
+              let request = googleTranslationRequest(for: AlignmentTransport.marked(chunk)) else {
             finishLongTextTranslationWithError(session: session)
             return
         }
         let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            let translation = data.flatMap(Self.translationText(from:))
+            let rawTranslation = data.flatMap(Self.translationText(from:))
             let succeeded = error == nil &&
                 (response as? HTTPURLResponse).map({ 200..<300 ~= $0.statusCode }) == true &&
-                !(translation?.isEmpty ?? true)
+                !(rawTranslation?.isEmpty ?? true)
             DispatchQueue.main.async {
                 guard let self,
                       session == self.longTextSession,
@@ -5073,7 +5626,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                     return
                 }
                 self.longTextConcurrentAPITasks[chunkIndex] = nil
-                guard succeeded, let translation else {
+                guard succeeded, let rawTranslation else {
                     let retries = self.longTextConcurrentAPIRetryCounts[chunkIndex, default: 0]
                     guard retries == 0 else {
                         self.finishLongTextTranslationWithError(session: session)
@@ -5087,8 +5640,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                     )
                     return
                 }
-                self.longTextConcurrentAPIResults[chunkIndex] =
-                    TranslationServiceTextNormalizer.normalize(translation, forSource: chunk)
+                self.longTextConcurrentAPIResults[chunkIndex] = self.alignmentTransportResult(
+                    rawTranslation: rawTranslation,
+                    sourceChunk: chunk
+                )
                 self.logTranslationTiming("parallel-api-chunk-ready")
                 self.flushConcurrentLongTextAPIResults(session: session)
             }
@@ -5102,8 +5657,17 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
               longTextUsesConcurrentAPIBatch else { return }
         var didAppend = false
         while longTextChunks.indices.contains(longTextChunkIndex),
-              let translation = longTextConcurrentAPIResults.removeValue(forKey: longTextChunkIndex) {
+              let result = longTextConcurrentAPIResults.removeValue(forKey: longTextChunkIndex) {
             let separator = longTextChunks[longTextChunkIndex].separatorAfter
+            let translation = result.visibleText
+            let translationOffset = longTextReplacesVisibleTranslation && longTextChunkIndex == 0
+                ? 0
+                : longTextTranslation.utf16.count
+            addMarkerAlignments(
+                result,
+                for: longTextChunks[longTextChunkIndex],
+                translationUTF16Offset: translationOffset
+            )
             if longTextReplacesVisibleTranslation && longTextChunkIndex == 0 {
                 longTextTranslation = translation + separator
                 longTextReplacesVisibleTranslation = false
@@ -5138,7 +5702,8 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             return
         }
         let encodingStartedAt = CACurrentMediaTime()
-        let encoded = Data(chunk.utf8).base64EncodedString()
+        let transportChunk = AlignmentTransport.marked(chunk)
+        let encoded = Data(transportChunk.utf8).base64EncodedString()
         logTranslationTiming(
             "text-encoding-completed",
             details: String(format: "duration_ms=%.3f", (CACurrentMediaTime() - encodingStartedAt) * 1_000)
@@ -5410,7 +5975,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             logTextPipelineSnapshot("4-google-textarea-after-write", returnedSource)
             if !self.didLogFirstTextInjection,
                let injectedSource = returnedSource,
-               injectedSource == chunk {
+               injectedSource == transportChunk {
                 self.didLogFirstTextInjection = true
                 self.logStartupTiming("First text injection completed")
             }
@@ -5422,7 +5987,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             // milliseconds, especially for long pasted text. Let the normal
             // source-verified poll decide instead; it still falls back at the
             // existing Web deadline when the input genuinely did not land.
-            guard returnedSource == chunk else {
+            guard returnedSource == transportChunk else {
                 self.logTranslationTiming("web-submission-awaiting-poll")
                 self.scheduleLongTextPoll(session: session)
                 return
@@ -5440,7 +6005,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         provisional: Bool = false
     ) {
         guard isCurrentTranslationWork(session: session),
-              let request = googleTranslationRequest(for: chunk) else {
+              let request = googleTranslationRequest(for: AlignmentTransport.marked(chunk)) else {
             logTranslationCoordinator("fallback-cancelled-as-stale", source: longTextSource)
             return
         }
@@ -5496,14 +6061,14 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                     return
                 }
                 if provisional && !self.longTextFallbackShouldFinalize {
-                    let normalized = TranslationServiceTextNormalizer.normalize(
-                        translation,
-                        forSource: chunk
+                    let result = self.alignmentTransportResult(
+                        rawTranslation: translation,
+                        sourceChunk: chunk
                     )
-                    self.longTextProvisionalFallbackTranslation = normalized
+                    self.longTextProvisionalFallbackTranslation = translation
                     self.logTranslationTiming("api-provisional-result-displayed")
                     self.previewSingleChunkTranslationIfSafe(
-                        normalized,
+                        result.visibleText,
                         session: session,
                         chunkIndex: requestedChunkIndex
                     )
@@ -5562,16 +6127,26 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             )
             return false
         }
-        let translation = TranslationServiceTextNormalizer.normalize(
-            translation,
-            forSource: longTextChunks[longTextChunkIndex].text
+        let chunk = longTextChunks[longTextChunkIndex]
+        let transportResult = alignmentTransportResult(
+            rawTranslation: translation,
+            sourceChunk: chunk.text
         )
-        let separator = longTextChunks[longTextChunkIndex].separatorAfter
+        let visibleTranslation = transportResult.visibleText
+        let separator = chunk.separatorAfter
+        let translationOffset = longTextReplacesVisibleTranslation && longTextChunkIndex == 0
+            ? 0
+            : longTextTranslation.utf16.count
+        addMarkerAlignments(
+            transportResult,
+            for: chunk,
+            translationUTF16Offset: translationOffset
+        )
         if longTextReplacesVisibleTranslation && longTextChunkIndex == 0 {
-            longTextTranslation = translation + separator
+            longTextTranslation = visibleTranslation + separator
             longTextReplacesVisibleTranslation = false
         } else {
-            longTextTranslation.append(translation)
+            longTextTranslation.append(visibleTranslation)
             longTextTranslation.append(separator)
         }
         longTextWebDeadline = nil
@@ -5757,21 +6332,24 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     }
 
     private static func translationText(from data: Data) -> String? {
-        let rawResponse = String(data: data, encoding: .utf8) ?? "<non-UTF8 response>"
         translationPipelineLogger.info(
-            "Google raw response: \(rawResponse, privacy: .public)"
+            "Google response received: bytes=\(data.count, privacy: .public)"
         )
         guard let response = try? JSONSerialization.jsonObject(with: data) as? [Any],
               let segments = response.first as? [[Any]] else {
             translationPipelineLogger.error("Google response JSON parsing failed")
             return nil
         }
+        // Keep transport markers here long enough for the caller to verify
+        // their exact count and order. They are stripped before every UI,
+        // clipboard, speech, undo, and persistent-log boundary.
         let translation = segments.compactMap { $0.first as? String }.joined()
         translationPipelineLogger.info(
             "Google parsed translation: chars=\(translation.count, privacy: .public)"
         )
         return translation.isEmpty ? nil : translation
     }
+
 
     private func presentNativeLanguagePicker(
         side: NativeLanguagePickerSide,
@@ -6415,15 +6993,18 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             let payload = result as? [Any]
             let observedSource = (payload?.first as? String ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let expectedSource = self.longTextChunks[self.longTextChunkIndex].text
+            let expectedSource = AlignmentTransport.marked(
+                self.longTextChunks[self.longTextChunkIndex].text
+            )
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let extractedTranslation = (payload?.dropFirst().first as? String ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             logTextPipelineSnapshot("google-dom-result-before-normalization", extractedTranslation)
-            let translation = TranslationServiceTextNormalizer.normalize(
-                extractedTranslation,
-                forSource: expectedSource
+            let transportResult = self.alignmentTransportResult(
+                rawTranslation: extractedTranslation,
+                sourceChunk: self.longTextChunks[self.longTextChunkIndex].text
             )
+            let translation = transportResult.visibleText
 
             // Do not accept a result until Google's textarea contains the
             // exact chunk currently being translated. This prevents a
@@ -6493,7 +7074,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 )
             }
             self.appendLongTextTranslation(
-                translation,
+                extractedTranslation,
                 session: session,
                 source: "Google Web"
             )
@@ -6522,7 +7103,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         guard session == longTextSession,
               let serviceWebView = activeTranslationWebView else { return }
         let serviceGeneration = longTextActiveWebViewGeneration
-        let encoded = Data(chunk.utf8).base64EncodedString()
+        let encoded = Data(AlignmentTransport.marked(chunk).utf8).base64EncodedString()
         logTranslationTiming("web-stall-light-retry-started")
         serviceWebView.evaluateJavaScript(#"""
             (() => {
@@ -6667,6 +7248,9 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextCompletedTargetLanguage = ""
         longTextReplacesVisibleTranslation = false
         longTextFormattingOnlyRefresh = false
+        sentenceAlignmentGeneration += 1
+        sentenceAlignments = []
+        clearSentenceAlignmentHighlight()
         longTextChunks = []
         longTextChunkIndex = 0
         setLongTextStatus(.idle)
@@ -7333,7 +7917,9 @@ extension ViewController: WKScriptMessageHandler {
                longTextChunks.indices.contains(observedChunkIndex),
                let observedSource = payload["source"] as? String,
                let observedTranslation = payload["translation"] as? String {
-                let expectedSource = longTextChunks[observedChunkIndex].text
+                let expectedSource = AlignmentTransport.marked(
+                    longTextChunks[observedChunkIndex].text
+                )
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let source = observedSource
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -7343,10 +7929,11 @@ extension ViewController: WKScriptMessageHandler {
                     "google-dom-observer-result-before-normalization",
                     extractedTranslation
                 )
-                let translation = TranslationServiceTextNormalizer.normalize(
-                    extractedTranslation,
-                    forSource: expectedSource
+                let transportResult = alignmentTransportResult(
+                    rawTranslation: extractedTranslation,
+                    sourceChunk: longTextChunks[observedChunkIndex].text
                 )
+                let translation = transportResult.visibleText
                 guard source == expectedSource,
                       !translation.isEmpty,
                       translation.range(
