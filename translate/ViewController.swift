@@ -1324,16 +1324,14 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var longTextFormattingOnlyRefresh = false
     private var longTextChunks: [TranslationChunk] = []
     private var longTextChunkIndex = 0
-    // One hidden Google DOM document is created for every long-text chunk.
-    // There is deliberately no worker-count limit.
-    private var longTextDOMWorkers: [Int: WKWebView] = [:]
-    private var longTextDOMWorkerResults: [Int: String] = [:]
-    private var longTextDOMWorkerCandidates: [Int: String] = [:]
-    private var longTextDOMWorkerStableCounts: [Int: Int] = [:]
-    private var longTextDOMWorkerSubmitted: Set<Int> = []
-    private var longTextDOMWorkerRetryCounts: [Int: Int] = [:]
-    private var longTextDOMWorkerSession = 0
     private var longTextChunkRetryCount = 0
+    // Documents that exceed two Web-sized chunks use bounded API-only batch
+    // translation. A single Google textarea cannot translate those chunks in
+    // parallel, while the API can; results remain ordered before display.
+    private var longTextUsesConcurrentAPIBatch = false
+    private var longTextConcurrentAPITasks: [Int: URLSessionDataTask] = [:]
+    private var longTextConcurrentAPIResults: [Int: String] = [:]
+    private var longTextConcurrentAPIRetryCounts: [Int: Int] = [:]
     private var longTextSession = 0
     private var longTextPollAttempts = 0
     private var longTextLastWebTranslation: String?
@@ -1349,10 +1347,14 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var longTextWebStartedAt: Date?
     private var longTextWebRetryTriggered = false
     private var longTextWebHasValidCandidate = false
+    private var longTextProvisionalFallbackStarted = false
+    private var longTextProvisionalFallbackTranslation: String?
+    private var longTextFallbackShouldFinalize = false
     private var longTextStatusState: LongTextStatusState = .idle
     private var longTextSourceLanguage = TranslateLanguagePreferences.source.rawValue
     private var longTextTargetLanguage = TranslateLanguagePreferences.target.rawValue
     private var longTextDebounceWorkItem: DispatchWorkItem?
+    private var longTextFallbackTask: URLSessionDataTask?
     private var lastRecoveredResultDisplaySession: Int?
     private var imeCompositionEndCheck: DispatchWorkItem?
     private var imeCompositionGeneration = 0
@@ -1367,10 +1369,15 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private let longTextTranslationDebounce: TimeInterval = 0.12
     private let longTextPollInterval: TimeInterval = 0.15
     private let longTextResultSettlingInterval: TimeInterval = 0.55
-    // Google Translate owns long-text pagination and sentence alignment in
-    // its DOM. Keep a generous deadline for that single complete submission;
-    // this app deliberately does not replace it with an API result.
-    private let longTextWebResultDeadline: TimeInterval = 20.0
+    // Give Google a short, bounded chance to produce its preferred result.
+    // API work starts earlier as a provisional safety net, so a stalled chunk
+    // does not add the former six-second delay to every oversized document.
+    private let longTextWebResultDeadline: TimeInterval = 3.0
+    private let concurrentAPIChunkThreshold = 3
+    // Google Translate Web accepts 5,000 UTF-16 code units. Stay close to
+    // that native limit while retaining a small safety margin for Web UI
+    // changes and characters represented by surrogate pairs.
+    private let googleWebChunkUTF16Limit = 4_500
     // Google can publish a provisional result and refine it in a later DOM
     // mutation. Use a shorter quiet period for ordinary short input, while
     // progressively retaining the conservative window for larger one-chunk
@@ -1786,11 +1793,28 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                         });
                     }, true);
 
-                    // Let Google Translate receive all paste events itself:
-                    // its long-text pagination and sentence-pair metadata are
-                    // needed by the native AppKit presentation. Normal typing
-                    // still moves to the native editor before it crosses the
-                    // page's editable-field threshold.
+                    // Google Translate truncates its editable field at 5,000
+                    // characters. Route a larger paste to native code before
+                    // Google's handler sees it; native code translates the
+                    // text in safe chunks and presents the complete result.
+                    document.addEventListener("paste", (event) => {
+                        const target = event.target;
+                        const textarea = target && target.closest ?
+                            target.closest(sourceSelector) : null;
+                        const text = event.clipboardData?.getData("text/plain") || "";
+                        if (!textarea || text.length <= 5000) return;
+                        event.preventDefault();
+                        event.stopImmediatePropagation();
+                        window.webkit.messageHandlers.callbackHandler.postMessage({
+                            action: "translateLongText",
+                            text
+                        });
+                    }, true);
+
+                    // The same handoff must work for normal typing, not only
+                    // for a large paste. Intercept the keystroke that would
+                    // cross Google's 5,000-character field limit and move
+                    // the complete editable value into the inline workspace.
                     document.addEventListener("beforeinput", (event) => {
                         const target = event.target;
                         const textarea = target && target.closest ?
@@ -2857,10 +2881,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error
     ) {
-        if longTextDOMWorkers.values.contains(where: { $0 === webView }) {
-            failDOMWorkers(session: longTextDOMWorkerSession)
-            return
-        }
         if webView === standbyTranslationWebView {
             standbyTranslationWebViewReady = false
             standbyTranslationWebViewLoading = false
@@ -2879,10 +2899,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         didFail navigation: WKNavigation!,
         withError error: Error
     ) {
-        if longTextDOMWorkers.values.contains(where: { $0 === webView }) {
-            failDOMWorkers(session: longTextDOMWorkerSession)
-            return
-        }
         if webView === standbyTranslationWebView {
             standbyTranslationWebViewReady = false
             standbyTranslationWebViewLoading = false
@@ -2897,11 +2913,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if let worker = longTextDOMWorkers.first(where: { $0.value === webView }) {
-            guard !longTextDOMWorkerSubmitted.contains(worker.key) else { return }
-            submitDOMWorker(worker.value, index: worker.key, session: longTextDOMWorkerSession)
-            return
-        }
         let label = webView === automaticTranslationWebView
             ? "Automatic"
             : (webView === standbyTranslationWebView ? "Standby" : "Primary")
@@ -4438,6 +4449,9 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextTranslation = keepsCompatibleVisibleResult ? longTextCompletedTranslation : ""
         longTextChunks = chunks
         longTextChunkIndex = 0
+        longTextUsesConcurrentAPIBatch = chunks.count >= concurrentAPIChunkThreshold
+        longTextConcurrentAPIResults = [:]
+        longTextConcurrentAPIRetryCounts = [:]
         longTextPollAttempts = 0
         longTextLastWebTranslation = nil
         longTextCandidateTranslation = nil
@@ -4461,10 +4475,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             return
         }
         updateLongTextLabels()
-        if chunks.count > 1 {
-            startConcurrentDOMWorkers(chunks, session: longTextSession)
-            return
-        }
         translateNextLongTextChunk(session: longTextSession)
     }
 
@@ -4590,7 +4600,9 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         let invalidatedRequestID = translationTimingRequest?.id
         let invalidatedSession = longTextSession
         let hadActiveRequest = translationTimingRequest != nil ||
-            longTextScheduledPoll != nil || !longTextChunks.isEmpty
+            longTextScheduledPoll != nil || longTextFallbackTask != nil ||
+            !longTextConcurrentAPITasks.isEmpty ||
+            !longTextChunks.isEmpty
 
         longTextSession += 1
         longTextActiveWebViewGeneration += 1
@@ -4603,18 +4615,16 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextWebStartedAt = nil
         longTextWebRetryTriggered = false
         longTextWebHasValidCandidate = false
+        longTextProvisionalFallbackStarted = false
+        longTextProvisionalFallbackTranslation = nil
+        longTextFallbackShouldFinalize = false
         longTextCandidateTranslation = nil
         longTextCandidateUpdatedAt = nil
         longTextChunks = []
         longTextChunkIndex = 0
-        longTextDOMWorkerSession = longTextSession
-        longTextDOMWorkers.values.forEach { $0.removeFromSuperview() }
-        longTextDOMWorkers = [:]
-        longTextDOMWorkerResults = [:]
-        longTextDOMWorkerCandidates = [:]
-        longTextDOMWorkerStableCounts = [:]
-        longTextDOMWorkerSubmitted = []
-        longTextDOMWorkerRetryCounts = [:]
+        longTextUsesConcurrentAPIBatch = false
+        longTextConcurrentAPIResults = [:]
+        longTextConcurrentAPIRetryCounts = [:]
 
         if longTextScheduledPoll != nil {
             longTextScheduledPoll?.cancel()
@@ -4626,6 +4636,19 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 session: invalidatedSession
             )
         }
+        if longTextFallbackTask != nil {
+            longTextFallbackTask?.cancel()
+            longTextFallbackTask = nil
+            logTranslationCoordinator(
+                "fallback-cancelled-as-stale",
+                source: source,
+                requestID: invalidatedRequestID,
+                session: invalidatedSession
+            )
+        }
+        longTextConcurrentAPITasks.values.forEach { $0.cancel() }
+        longTextConcurrentAPITasks = [:]
+
         for serviceWebView in [webView, automaticTranslationWebView] {
             serviceWebView?.evaluateJavaScript(#"""
                 window.__macTranslateResultObserver?.disconnect();
@@ -4693,7 +4716,9 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         case .debouncedNativeInput:
             delay = nativeTextTranslationDebounce
         case .immediate:
-            delay = source.utf16.count > 4_500 ? longTextTranslationDebounce : 0
+            delay = source.utf16.count > googleWebChunkUTF16Limit
+                ? longTextTranslationDebounce
+                : 0
         }
 
         let submit = { [weak self] in
@@ -4764,6 +4789,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextFormattingOnlyRefresh = false
         longTextChunks = []
         longTextChunkIndex = 0
+        longTextUsesConcurrentAPIBatch = false
+        longTextConcurrentAPITasks.values.forEach { $0.cancel() }
+        longTextConcurrentAPITasks = [:]
+        longTextConcurrentAPIResults = [:]
+        longTextConcurrentAPIRetryCounts = [:]
         longTextPollAttempts = 0
         longTextLastWebTranslation = nil
         longTextCandidateTranslation = nil
@@ -4816,219 +4846,95 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         logTranslationCoordinator("empty-input-cleared", source: "")
     }
 
-    // Formatting-only refresh detection intentionally ignores line breaks.
+    // Google measures its 5,000-character limit with JavaScript's UTF-16
+    // length. Use the same unit instead of Swift grapheme count so emoji and
+    // supplementary-plane characters can never push a request over the web
+    // limit. At 4,500 units, ordinary input remains on Google's continuous
+    // one-page path until it is genuinely close to the service limit.
     private func textRemovingLineBreaks(_ text: String) -> String {
         text.components(separatedBy: .newlines).joined()
     }
 
     private func splitLongText(_ text: String) -> [TranslationChunk] {
-        let limit = 4_500
         var chunks: [TranslationChunk] = []
         var start = text.startIndex
+
         while start < text.endIndex {
-            var end = start
-            var count = 0
-            while end < text.endIndex {
-                let next = text.index(after: end)
-                let size = text[end..<next].utf16.count
-                guard count + size <= limit else { break }
-                count += size
-                end = next
+            var maximumEnd = start
+            var utf16Count = 0
+            while maximumEnd < text.endIndex {
+                let next = text.index(after: maximumEnd)
+                let characterUTF16Count = text[maximumEnd..<next].utf16.count
+                guard utf16Count + characterUTF16Count <= googleWebChunkUTF16Limit else {
+                    break
+                }
+                utf16Count += characterUTF16Count
+                maximumEnd = next
             }
-            if end == text.endIndex {
-                chunks.append(TranslationChunk(text: String(text[start..<end]), separatorAfter: ""))
+            if maximumEnd == text.endIndex {
+                chunks.append(TranslationChunk(
+                    text: String(text[start..<text.endIndex]),
+                    separatorAfter: ""
+                ))
                 break
             }
-            let candidate = text[start..<end]
-            let minimum = candidate.index(candidate.startIndex,
-                                          offsetBy: Int(Double(candidate.count) * 0.55))
-            let boundary = candidate.indices.reversed().first { index in
-                index >= minimum && ".!?。！？\n".contains(candidate[index])
-            } ?? candidate.indices.reversed().first { candidate[$0].isWhitespace } ?? end
-            let next = boundary < text.endIndex ? text.index(after: boundary) : end
-            chunks.append(TranslationChunk(text: String(text[start..<next]), separatorAfter: ""))
-            start = next
-        }
-        return chunks
-    }
 
-    private func startConcurrentDOMWorkers(_ chunks: [TranslationChunk], session: Int) {
-        longTextDOMWorkers.values.forEach { $0.removeFromSuperview() }
-        longTextDOMWorkers = [:]
-        longTextDOMWorkerResults = [:]
-        longTextDOMWorkerCandidates = [:]
-        longTextDOMWorkerStableCounts = [:]
-        longTextDOMWorkerSubmitted = []
-        longTextDOMWorkerRetryCounts = [:]
-        longTextDOMWorkerSession = session
-        for (index, chunk) in chunks.enumerated() where !chunk.text.isEmpty {
-            let configuration = WKWebViewConfiguration()
-            let worker = WKWebView(frame: webView.frame, configuration: configuration)
-            worker.navigationDelegate = self
-            // A non-zero alpha keeps WebKit's DOM active, while placing the
-            // worker below the app's existing translation documents prevents
-            // multiple pages from tinting or intercepting the native UI.
-            worker.alphaValue = 0.0001
-            worker.setValue(false, forKey: "drawsBackground")
-            view.addSubview(
-                worker,
-                positioned: .below,
-                relativeTo: automaticTranslationWebView
-            )
-            longTextDOMWorkers[index] = worker
-            worker.load(URLRequest(url: translationURL(
-                source: effectiveSourceLanguage(for: chunk.text),
-                target: currentTargetLanguage
-            )))
-        }
-        setLongTextStatus(.translating)
-        logTranslationTiming("dom-workers-started", details: "chunks=\(chunks.count)")
-    }
-
-    private func submitDOMWorker(
-        _ worker: WKWebView,
-        index: Int,
-        session: Int,
-        readinessAttempt: Int = 0
-    ) {
-        guard session == longTextDOMWorkerSession,
-              let chunk = longTextChunks.indices.contains(index) ? longTextChunks[index].text : nil else { return }
-        let encoded = Data(chunk.utf8).base64EncodedString()
-        worker.evaluateJavaScript(#"""
-            (() => {
-                const textarea = document.querySelector("textarea");
-                if (!textarea) return false;
-                const value = new TextDecoder().decode(Uint8Array.from(atob("\#(encoded)"), c => c.charCodeAt(0)));
-                Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(textarea, value);
-                textarea.dispatchEvent(new Event("input", { bubbles: true }));
-                return true;
-            })();
-        """#) { [weak self, weak worker] result, _ in
-            guard let self, let worker, session == self.longTextDOMWorkerSession else { return }
-            if result as? Bool == true {
-                self.longTextDOMWorkerSubmitted.insert(index)
-                self.logTranslationTiming("dom-worker-submitted", details: "index=\(index)")
-                self.pollDOMWorker(worker, index: index, session: session, attempt: 0)
-            } else if readinessAttempt < 200 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    self.submitDOMWorker(
-                        worker,
-                        index: index,
-                        session: session,
-                        readinessAttempt: readinessAttempt + 1
-                    )
+            let candidate = text[start..<maximumEnd]
+            let minimumBreakOffset = Int(Double(candidate.count) * 0.55)
+            let minimumBreak = candidate.index(
+                candidate.startIndex,
+                offsetBy: minimumBreakOffset,
+                limitedBy: candidate.endIndex
+            ) ?? candidate.startIndex
+            let sentenceBreakCharacters = CharacterSet(charactersIn: ".!?。！？")
+            let whitespaceBreakCharacters = CharacterSet.whitespacesAndNewlines
+            let isBreak = { (index: String.Index, characters: CharacterSet) in
+                guard index >= minimumBreak else { return false }
+                return candidate[index].unicodeScalars.allSatisfy {
+                    characters.contains($0)
                 }
-            } else {
-                self.failDOMWorkers(session: session)
             }
-        }
-    }
+            // Preserve sentence context whenever possible. Falling back to a
+            // whitespace boundary still guarantees we do not split a word.
+            let preferredBreak = candidate.indices.reversed().first {
+                isBreak($0, sentenceBreakCharacters)
+            } ?? candidate.indices.reversed().first {
+                isBreak($0, whitespaceBreakCharacters)
+            }
 
-    private func pollDOMWorker(_ worker: WKWebView, index: Int, session: Int, attempt: Int) {
-        guard session == longTextDOMWorkerSession else { return }
-        guard attempt < 200 else {
-            retryDOMWorkerIfPossible(worker, index: index, session: session)
-            return
-        }
-        worker.evaluateJavaScript(#"""
-            (() => {
-                const root = document.querySelector('.QcsUad.sMVRZe') ||
-                    document.querySelector('.QcsUad:not(.FkMbO)') ||
-                    document.querySelector('.QcsUad');
-                if (!root) return '';
-                const groups = [
-                    '[jsname="W297wb"]', '.ryNqvb', '.jCAhz', '.lRu31', '.HwtZe'
-                ];
-                let nodes = [];
-                for (const selector of groups) {
-                    nodes = Array.from(root.querySelectorAll(selector));
-                    if (nodes.length) break;
+            if let preferredBreak {
+                let next = text.index(after: preferredBreak)
+                let boundary = text[preferredBreak..<next]
+                let isWhitespace = boundary.unicodeScalars.allSatisfy {
+                    CharacterSet.whitespacesAndNewlines.contains($0)
                 }
-                const candidates = nodes.filter(element =>
-                    !element.closest('.UdTY9, .zWhQbb, .mDTU0c'));
-                return candidates
-                    .filter(element => !candidates.some(other =>
-                        other !== element && element.contains(other) &&
-                        (other.innerText || other.textContent || '').trim() ===
-                            (element.innerText || element.textContent || '').trim()))
-                    .map(element => (element.innerText || element.textContent || '').trim())
-                    .filter(Boolean)
-                    .filter((value, position, all) => all.indexOf(value) === position)
-                    .join('\n');
-            })();
-        """#) { [weak self, weak worker] result, _ in
-            guard let self, let worker, session == self.longTextDOMWorkerSession else { return }
-            let text = (result as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty && self.longTextDOMWorkerCandidates[index] == text {
-                self.longTextDOMWorkerStableCounts[index, default: 0] += 1
+                var separatorStart = preferredBreak
+                if isWhitespace {
+                    while separatorStart > start {
+                        let previous = text.index(before: separatorStart)
+                        guard text[previous].unicodeScalars.allSatisfy({
+                            CharacterSet.whitespacesAndNewlines.contains($0)
+                        }) else { break }
+                        separatorStart = previous
+                    }
+                }
+                chunks.append(TranslationChunk(
+                    text: String(text[start..<(isWhitespace ? separatorStart : next)]),
+                    separatorAfter: isWhitespace
+                        ? String(text[separatorStart..<next])
+                        : ""
+                ))
+                start = next
             } else {
-                self.longTextDOMWorkerCandidates[index] = text
-                self.longTextDOMWorkerStableCounts[index] = text.isEmpty ? 0 : 1
-            }
-            if !text.isEmpty && self.longTextDOMWorkerStableCounts[index, default: 0] >= 4 {
-                self.longTextDOMWorkerResults[index] = text
-                self.logTranslationTiming(
-                    "dom-worker-result-stable",
-                    details: "index=\(index) chars=\(text.count)"
-                )
-                self.finishDOMWorkersIfReady(session: session)
-                return
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                self.pollDOMWorker(worker, index: index, session: session, attempt: attempt + 1)
+                chunks.append(TranslationChunk(
+                    text: String(text[start..<maximumEnd]),
+                    separatorAfter: ""
+                ))
+                start = maximumEnd
             }
         }
-    }
 
-    private func retryDOMWorkerIfPossible(
-        _ worker: WKWebView,
-        index: Int,
-        session: Int
-    ) {
-        guard session == longTextDOMWorkerSession else { return }
-        let retries = longTextDOMWorkerRetryCounts[index, default: 0]
-        guard retries < 1 else {
-            logTranslationTiming("dom-worker-failed", details: "index=\(index)")
-            failDOMWorkers(session: session)
-            return
-        }
-        longTextDOMWorkerRetryCounts[index] = retries + 1
-        longTextDOMWorkerSubmitted.remove(index)
-        longTextDOMWorkerCandidates[index] = nil
-        longTextDOMWorkerStableCounts[index] = nil
-        logTranslationTiming("dom-worker-retrying", details: "index=\(index)")
-        worker.reload()
-    }
-
-    private func failDOMWorkers(session: Int) {
-        guard session == longTextDOMWorkerSession else { return }
-        longTextDOMWorkerSession += 1
-        longTextDOMWorkers.values.forEach {
-            $0.stopLoading()
-            $0.removeFromSuperview()
-        }
-        longTextDOMWorkers = [:]
-        longTextDOMWorkerResults = [:]
-        longTextDOMWorkerCandidates = [:]
-        longTextDOMWorkerStableCounts = [:]
-        longTextDOMWorkerSubmitted = []
-        longTextDOMWorkerRetryCounts = [:]
-        finishLongTextTranslationWithError(session: session)
-    }
-
-    private func finishDOMWorkersIfReady(session: Int) {
-        guard session == longTextDOMWorkerSession,
-              longTextDOMWorkerResults.count == longTextChunks.count else { return }
-        longTextTranslation = longTextChunks.indices.map { longTextDOMWorkerResults[$0] ?? "" }.joined()
-        longTextTranslationView?.string = longTextTranslation
-        longTextChunkIndex = longTextChunks.count
-        longTextDOMWorkers.values.forEach { $0.removeFromSuperview() }
-        longTextDOMWorkers = [:]
-        longTextDOMWorkerCandidates = [:]
-        longTextDOMWorkerStableCounts = [:]
-        longTextDOMWorkerSubmitted = []
-        longTextDOMWorkerRetryCounts = [:]
-        translateNextLongTextChunk(session: session)
+        return chunks.filter { !$0.text.isEmpty || !$0.separatorAfter.isEmpty }
     }
 
     private func translateNextLongTextChunk(session: Int) {
@@ -5075,6 +4981,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             return
         }
 
+        if longTextUsesConcurrentAPIBatch {
+            startConcurrentLongTextAPIBatchIfNeeded(session: session)
+            return
+        }
+
         let chunk = longTextChunks[longTextChunkIndex].text
         if chunk.isEmpty {
             longTextTranslation.append(longTextChunks[longTextChunkIndex].separatorAfter)
@@ -5089,6 +5000,9 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextWebStartedAt = Date()
         longTextWebRetryTriggered = false
         longTextWebHasValidCandidate = false
+        longTextProvisionalFallbackStarted = false
+        longTextProvisionalFallbackTranslation = nil
+        longTextFallbackShouldFinalize = false
         longTextCandidateTranslation = nil
         longTextCandidateUpdatedAt = nil
         // A Return-only edit should behave like Google Translate Web: retain
@@ -5109,7 +5023,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         )
     }
 
-    #if false // Legacy API batch implementation intentionally excluded.
     /// Google Translate's web UI owns one textarea, so it can only process
     /// oversized chunks serially. For documents with three or more chunks,
     /// request the API chunks concurrently and reveal them strictly in source
@@ -5214,8 +5127,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         }
     }
 
-    #endif
-
     private func translateLongTextChunkUsingGoogleWeb(
         _ chunk: String,
         session: Int
@@ -5223,7 +5134,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         guard session == longTextSession else { return }
         logTextPipelineSnapshot("3-before-webview-submission", chunk)
         guard let serviceWebView = activeTranslationWebView else {
-            finishLongTextTranslationWithError(session: session)
+            translateLongTextChunkUsingAPI(chunk, session: session)
             return
         }
         let encodingStartedAt = CACurrentMediaTime()
@@ -5506,9 +5417,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
             // The synchronous JavaScript result is merely an acknowledgement
             // of the textarea write. WebKit can occasionally return nil or
             // normalize the value while Google has already accepted the
-            // input and begun updating its result DOM. Let the normal
-            // source-verified poll decide; this pipeline only accepts DOM
-            // results, including Google-owned long-text pagination.
+            // input and begun updating its result DOM. Falling back here
+            // discarded those valid WebView translations within a few
+            // milliseconds, especially for long pasted text. Let the normal
+            // source-verified poll decide instead; it still falls back at the
+            // existing Web deadline when the input genuinely did not land.
             guard returnedSource == chunk else {
                 self.logTranslationTiming("web-submission-awaiting-poll")
                 self.scheduleLongTextPoll(session: session)
@@ -5521,7 +5434,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         }
     }
 
-    #if false // Legacy API fallback intentionally excluded.
     private func translateLongTextChunkUsingAPI(
         _ chunk: String,
         session: Int,
@@ -5608,8 +5520,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextFallbackTask = task
         task.resume()
     }
-
-    #endif
 
     private func isCurrentTranslationWork(session: Int) -> Bool {
         guard session == longTextSession,
@@ -5830,7 +5740,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         }
     }
 
-    #if false // No translation HTTP API is part of the DOM-only pipeline.
     private func googleTranslationRequest(for text: String) -> URLRequest? {
         var components = URLComponents(string: "https://translate.googleapis.com/translate_a/single")
         components?.queryItems = [
@@ -5863,8 +5772,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         )
         return translation.isEmpty ? nil : translation
     }
-
-    #endif
 
     private func presentNativeLanguagePicker(
         side: NativeLanguagePickerSide,
@@ -6355,7 +6262,8 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         longTextScheduledPoll = nil
         longTextPollAttempts += 1
         guard longTextWebDeadline.map({ Date() <= $0 }) ?? false else {
-            finishLongTextTranslationWithError(session: session)
+            let chunk = longTextChunks[longTextChunkIndex].text
+            finalizeWithAPIFallbackIfNeeded(chunk, session: session)
             return
         }
 
@@ -6367,12 +6275,23 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
                 longTextWebRetryTriggered = true
                 retriggerStalledGoogleWebTranslation(chunk, session: session)
             }
+            if !longTextProvisionalFallbackStarted {
+                longTextProvisionalFallbackStarted = true
+                translateLongTextChunkUsingAPI(
+                    chunk,
+                    session: session,
+                    provisional: true
+                )
+            }
         }
 
         longTextPollInFlightSession = session
         guard let serviceWebView = activeTranslationWebView else {
             longTextPollInFlightSession = nil
-            finishLongTextTranslationWithError(session: session)
+            translateLongTextChunkUsingAPI(
+                longTextChunks[longTextChunkIndex].text,
+                session: session
+            )
             return
         }
         let serviceGeneration = longTextActiveWebViewGeneration
@@ -6581,7 +6500,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         }
     }
 
-    #if false // Legacy API deadline fallback intentionally excluded.
     private func finalizeWithAPIFallbackIfNeeded(_ chunk: String, session: Int) {
         guard isCurrentTranslationWork(session: session) else { return }
         longTextFallbackShouldFinalize = true
@@ -6599,8 +6517,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         guard longTextFallbackTask == nil else { return }
         translateLongTextChunkUsingAPI(chunk, session: session)
     }
-
-    #endif
 
     private func retriggerStalledGoogleWebTranslation(_ chunk: String, session: Int) {
         guard session == longTextSession,
@@ -6640,6 +6556,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private func noteValidGoogleWebCandidate() {
         guard !longTextWebHasValidCandidate else { return }
         longTextWebHasValidCandidate = true
+        if longTextFallbackTask != nil {
+            longTextFallbackTask?.cancel()
+            longTextFallbackTask = nil
+            logTranslationTiming("api-provisional-cancelled-web-won")
+        }
     }
 
     private func recordLongTextCandidate(_ translation: String) {
