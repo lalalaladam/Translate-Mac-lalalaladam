@@ -195,11 +195,10 @@ final class TranslationPerformanceDiagnostics {
         status: String = "info",
         characterCount: Int,
         utf16Count: Int,
-        direction: String,
-        extra: [String: Any] = [:]
+        direction: String
     ) {
         queue.async { [self] in
-            var record: [String: Any] = [
+            appendRecord([
                 "timestamp": Self.timestamp(),
                 "run_id": runID,
                 "request_id": 0,
@@ -211,12 +210,7 @@ final class TranslationPerformanceDiagnostics {
                 "text_utf16": utf16Count,
                 "direction": direction,
                 "status": status
-            ]
-            // Callers may add only runtime metrics (counts, durations,
-            // ranges, and UI state). Translation/source content must never
-            // be placed in this diagnostic stream.
-            extra.forEach { key, value in record[key] = value }
-            appendRecord(record)
+            ])
         }
     }
 
