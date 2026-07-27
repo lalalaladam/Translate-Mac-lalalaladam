@@ -158,6 +158,28 @@ final class TranslationPerformanceDiagnostics {
         }
     }
 
+    /// Records a privacy-safe diagnostic event with numeric or categorical
+    /// fields. Callers must never place source or translated text in `extra`.
+    func recordDetailed(
+        requestID: Int,
+        stage: String,
+        status: String = "running",
+        extra: [String: Any]
+    ) {
+        guard requestID > 0 else { return }
+        let now = CACurrentMediaTime()
+        queue.async { [self] in
+            guard requests[requestID]?.isTerminal == false else { return }
+            write(
+                requestID: requestID,
+                stage: stage,
+                status: status,
+                at: now,
+                extra: extra
+            )
+        }
+    }
+
     /// Level 2 state transition record. The optional flags describe runtime
     /// state only; source and translated text are intentionally never logged.
     func recordStateTransition(
