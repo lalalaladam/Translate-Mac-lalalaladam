@@ -20,6 +20,10 @@
 		E9D1A0052000000000000001 /* PronunciationSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0062000000000000001 /* PronunciationSupport.swift */; };
 		E9D1A0072000000000000001 /* WorkspaceUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0082000000000000001 /* WorkspaceUI.swift */; };
 		E9D1A0092000000000000001 /* ShortcutSettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A00A2000000000000001 /* ShortcutSettingsWindowController.swift */; };
+		E9D1A00B2000000000000001 /* ShortcutPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A00C2000000000000001 /* ShortcutPreferences.swift */; };
+		E9D1A00D2000000000000001 /* AppInterfaceLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A00E2000000000000001 /* AppInterfaceLanguage.swift */; };
+		E9D1A00F2000000000000001 /* TranslateLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0102000000000000001 /* TranslateLanguage.swift */; };
+		E9D1A0112000000000000001 /* TranslateFeaturePreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0122000000000000001 /* TranslateFeaturePreferences.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -38,6 +42,10 @@
 		E9D1A0062000000000000001 /* PronunciationSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationSupport.swift; sourceTree = "<group>"; };
 		E9D1A0082000000000000001 /* WorkspaceUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceUI.swift; sourceTree = "<group>"; };
 		E9D1A00A2000000000000001 /* ShortcutSettingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutSettingsWindowController.swift; sourceTree = "<group>"; };
+		E9D1A00C2000000000000001 /* ShortcutPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutPreferences.swift; sourceTree = "<group>"; };
+		E9D1A00E2000000000000001 /* AppInterfaceLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInterfaceLanguage.swift; sourceTree = "<group>"; };
+		E9D1A0102000000000000001 /* TranslateLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslateLanguage.swift; sourceTree = "<group>"; };
+		E9D1A0122000000000000001 /* TranslateFeaturePreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslateFeaturePreferences.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -84,6 +92,10 @@
 				E9D1A0062000000000000001 /* PronunciationSupport.swift */,
 				E9D1A0082000000000000001 /* WorkspaceUI.swift */,
 				E9D1A00A2000000000000001 /* ShortcutSettingsWindowController.swift */,
+				E9D1A00C2000000000000001 /* ShortcutPreferences.swift */,
+				E9D1A00E2000000000000001 /* AppInterfaceLanguage.swift */,
+				E9D1A0102000000000000001 /* TranslateLanguage.swift */,
+				E9D1A0122000000000000001 /* TranslateFeaturePreferences.swift */,
 			);
 			path = translate;
 			sourceTree = "<group>";
@@ -169,6 +181,10 @@
 				E9D1A0052000000000000001 /* PronunciationSupport.swift in Sources */,
 				E9D1A0072000000000000001 /* WorkspaceUI.swift in Sources */,
 				E9D1A0092000000000000001 /* ShortcutSettingsWindowController.swift in Sources */,
+				E9D1A00B2000000000000001 /* ShortcutPreferences.swift in Sources */,
+				E9D1A00D2000000000000001 /* AppInterfaceLanguage.swift in Sources */,
+				E9D1A00F2000000000000001 /* TranslateLanguage.swift in Sources */,
+				E9D1A0112000000000000001 /* TranslateFeaturePreferences.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
