@@ -44,6 +44,11 @@ xcodebuild \
     CODE_SIGNING_REQUIRED=NO \
     build
 
+if [[ ! -x "$APP_PATH/Contents/MacOS/$PRODUCT_NAME" ]]; then
+    echo "Build failed to produce $APP_PATH/Contents/MacOS/$PRODUCT_NAME" >&2
+    exit 1
+fi
+
 codesign --force --deep --sign - "$APP_PATH"
 codesign --verify --deep --strict "$APP_PATH"
 

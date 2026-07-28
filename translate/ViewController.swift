@@ -56,7 +56,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         case failed
     }
 
-    private enum SpeechPane {
+    enum SpeechPane {
         case source
         case translation
     }
@@ -161,8 +161,8 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     private var workspaceSourceCountLabel: NSTextField?
     private var workspaceTranslationCountLabel: NSTextField?
     private var isUpdatingNativeWorkspace = false
-    private var longTextSource: String?
-    private var longTextTranslation = ""
+    var longTextSource: String?
+    var longTextTranslation = ""
     // Keep the last completed result visible while Google recalculates the
     // complete current source. This is a display buffer only: never use it as
     // a translation prefix, because word order and meaning may change when
@@ -257,8 +257,8 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     // visible so Google updates its result DOM at normal foreground speed.
     private let backgroundTranslationWebViewAlpha: CGFloat = 0.01
     private var languagePickerPopover: NSPopover?
-    private let speechSynthesizer = AVSpeechSynthesizer()
-    private var activeSpeechPane: SpeechPane?
+    let speechSynthesizer = AVSpeechSynthesizer()
+    var activeSpeechPane: SpeechPane?
     // These are the languages of the currently open translation, not the
     // user's persistent defaults in the status-bar menu.
     var currentSourceLanguage = TranslateLanguagePreferences.source
@@ -1232,7 +1232,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
         let header = NSView()
         header.translatesAutoresizingMaskIntoConstraints = false
-        [sourceLanguageButton, swapButton, targetLanguageButton].forEach {
+        ([sourceLanguageButton, swapButton, targetLanguageButton] as [NSView]).forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             header.addSubview($0)
         }
@@ -4681,7 +4681,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         popover.show(relativeTo: anchor, of: webView, preferredEdge: .maxY)
     }
 
-    private func presentNativeLanguagePicker(
+    func presentNativeLanguagePicker(
         side: NativeLanguagePickerSide,
         relativeTo button: NSButton
     ) {
@@ -4740,7 +4740,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         }
     }
 
-    private func swapCurrentTranslationLanguages() {
+    func swapCurrentTranslationLanguages() {
         guard longTextSourceView?.hasMarkedText() != true else {
             logTranslationCoordinator("language-swap-skipped-marked-text")
             logInputMethodTiming("language-swap-skipped-marked-text")
@@ -5926,106 +5926,6 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
     @objc private func workspaceSpeakTranslation() {
         speakTranslation()
-    }
-
-    private func speakSource() {
-        if longTextOverlay?.isHidden == false {
-            let source = selectedText(in: longTextSourceView) ??
-                longTextSourceView?.string ?? longTextSource ?? ""
-            speak(source, language: currentSourceLanguage, pane: .source)
-            return
-        }
-        webView.evaluateJavaScript(#"""
-            (() => window.getSelection()?.toString().trim() ||
-                document.querySelector("textarea")?.value || "")();
-        """#) { [weak self] result, _ in
-            guard let self, let text = result as? String else { return }
-            DispatchQueue.main.async {
-                self.speak(text, language: self.currentSourceLanguage, pane: .source)
-            }
-        }
-    }
-
-    private func speakTranslation() {
-        if longTextOverlay?.isHidden == false {
-            let translation = selectedText(in: longTextTranslationView) ??
-                longTextTranslationView?.string ?? longTextTranslation
-            speak(translation, language: currentTargetLanguage, pane: .translation)
-            return
-        }
-        webView.evaluateJavaScript(#"""
-            (() => {
-                const selected = window.getSelection()?.toString().trim();
-                if (selected) return selected;
-                const selectors = [
-                    ".QcsUad .ryNqvb",
-                    ".QcsUad .HwtZe",
-                    ".QcsUad .jCAhz",
-                    ".QcsUad .lRu31"
-                ];
-                for (const selector of selectors) {
-                    const text = document.querySelector(selector)?.innerText?.trim();
-                    if (text) return text;
-                }
-                return "";
-            })();
-        """#) { [weak self] result, _ in
-            guard let self, let text = result as? String else { return }
-            DispatchQueue.main.async {
-                self.speak(text, language: self.currentTargetLanguage, pane: .translation)
-            }
-        }
-    }
-
-    private func selectedText(in view: NSTextView?) -> String? {
-        guard let view, view.selectedRange().length > 0 else { return nil }
-        let range = view.selectedRange()
-        return (view.string as NSString).substring(with: range)
-    }
-
-    // MARK: - On-demand text alignment
-
-    /// Expand both ends of the user's selection to semantic units.  Reference
-    /// entries contain DOI values, dates and initials whose periods are not
-    /// sentence boundaries, so an entire citation line is one unit.
-    private func speak(_ text: String, language: TranslateLanguage, pane: SpeechPane) {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-
-        // The same control toggles an active utterance off. Starting the
-        // opposite pane always interrupts the previous one immediately.
-        if speechSynthesizer.isSpeaking, activeSpeechPane == pane {
-            stopSpeaking()
-            return
-        }
-        stopSpeaking()
-
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-        if language != .automatic {
-            utterance.voice = AVSpeechSynthesisVoice(language: language.rawValue)
-        }
-        speechSynthesizer.speak(utterance)
-        activeSpeechPane = pane
-    }
-
-    private func stopSpeaking() {
-        if speechSynthesizer.isSpeaking {
-            speechSynthesizer.stopSpeaking(at: .immediate)
-        }
-        activeSpeechPane = nil
-    }
-
-    @objc private func workspaceSourceLanguageClicked(_ sender: NSButton) {
-        presentNativeLanguagePicker(side: .source, relativeTo: sender)
-    }
-
-    @objc private func workspaceTargetLanguageClicked(_ sender: NSButton) {
-        presentNativeLanguagePicker(side: .target, relativeTo: sender)
-    }
-
-    @objc private func workspaceSwapLanguages() {
-        swapCurrentTranslationLanguages()
     }
 
     private func textCountDescription(_ text: String) -> String {
