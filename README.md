@@ -2,6 +2,28 @@
 
 A native macOS translation workspace with a glass interface, multilingual support, long-text handling, Spaces behavior, and configurable shortcuts. This is an independent redesign and extension originally derived from [m-inan/mac-translate](https://github.com/m-inan/mac-translate); it is not an official version and is not endorsed by the original author.
 
+## Version History
+
+| Version | Main Changes |
+|---|---|
+| v1.0.16 | Added source-text alignment context menu and translation logging (新增原文对齐右键菜单和翻译日志功能) |
+| v1.0.15 | Improved translation diagnostics, IME handling, and build traceability (改进翻译诊断、输入法处理以及构建追踪能力) |
+| v1.0.14 | Improved long-text translation performance and diagnostics (改进长文本翻译性能和诊断功能) |
+| v1.0.13 | Improved translation responsiveness, request handling, and API stability (提升翻译响应速度、请求处理能力和 API 稳定性) |
+| v1.0.12 | Fixed citation text handling and improved clipboard processing (修复引用文本处理问题并改进剪贴板处理) |
+| v1.0.11 | Improved input handling, rich-text paste, and translation workflow (改进输入处理、富文本粘贴和翻译流程) |
+| v1.0.10 | Improved rich-text support, text preservation, and long-text translation (改进富文本支持、文本格式保留以及长文本翻译) |
+| v1.0.9 | Improved dark mode support, interface rendering, and resource handling (改进深色模式支持、界面渲染和资源处理) |
+| v1.0.8 | Improved language switching stability and background WebView focus handling (改进语言切换稳定性和后台 WebView 焦点处理) |
+| v1.0.7 | Improved translation stability, long-text handling, and result accuracy (提升翻译稳定性、长文本处理能力和结果准确性) |
+| v1.0.6 | Fixed stale translation results and improved update validation (修复过期翻译结果问题并改进结果更新校验) |
+| v1.0.5 | Improved language switching, long-text translation, and responsiveness (改进语言切换、长文本翻译和响应速度) |
+| v1.0.4 | Improved translation reliability, language handling, and UI stability (提升翻译可靠性、语言处理能力和界面稳定性) |
+| v1.0.3 | Improved pronunciation lookup and updated application identity (改进发音查询功能并更新应用标识) |
+| v1.0.2 | Added pronunciation support and improved translation workspace (新增发音支持并改进翻译工作区) |
+| v1.0.1 | Improved language switching and introduced release build workflow (改进语言切换并引入正式版本构建流程) |
+| v1.0.0 | Initial release with native macOS translation workspace and multilingual support (首次发布，包含原生 macOS 翻译工作区和多语言支持) |
+
 ## Current version
 
 The first standalone release is Translate v1.0.0. Releases will be published at [Translate-Mac-lalalaladam](https://github.com/lalalaladam/Translate-Mac-lalalaladam/releases).
