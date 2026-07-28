@@ -19,6 +19,7 @@
 		E9D1A0032000000000000001 /* TextSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0042000000000000001 /* TextSupport.swift */; };
 		E9D1A0052000000000000001 /* PronunciationSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0062000000000000001 /* PronunciationSupport.swift */; };
 		E9D1A0072000000000000001 /* WorkspaceUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0082000000000000001 /* WorkspaceUI.swift */; };
+		E9D1A0092000000000000001 /* ShortcutSettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A00A2000000000000001 /* ShortcutSettingsWindowController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +37,7 @@
 		E9D1A0042000000000000001 /* TextSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSupport.swift; sourceTree = "<group>"; };
 		E9D1A0062000000000000001 /* PronunciationSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationSupport.swift; sourceTree = "<group>"; };
 		E9D1A0082000000000000001 /* WorkspaceUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceUI.swift; sourceTree = "<group>"; };
+		E9D1A00A2000000000000001 /* ShortcutSettingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutSettingsWindowController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -81,6 +83,7 @@
 				E9D1A0042000000000000001 /* TextSupport.swift */,
 				E9D1A0062000000000000001 /* PronunciationSupport.swift */,
 				E9D1A0082000000000000001 /* WorkspaceUI.swift */,
+				E9D1A00A2000000000000001 /* ShortcutSettingsWindowController.swift */,
 			);
 			path = translate;
 			sourceTree = "<group>";
@@ -165,6 +168,7 @@
 				E9D1A0032000000000000001 /* TextSupport.swift in Sources */,
 				E9D1A0052000000000000001 /* PronunciationSupport.swift in Sources */,
 				E9D1A0072000000000000001 /* WorkspaceUI.swift in Sources */,
+				E9D1A0092000000000000001 /* ShortcutSettingsWindowController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
