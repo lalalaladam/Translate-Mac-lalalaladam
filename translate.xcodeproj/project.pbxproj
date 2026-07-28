@@ -16,6 +16,9 @@
 		E9FE498E297C425200104027 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9FE498D297C425200104027 /* Constants.swift */; };
 		E9A000012000000000000001 /* GlobalHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9A000002000000000000001 /* GlobalHotKey.swift */; };
 		E9D1A0012000000000000001 /* TranslationPerformanceDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0022000000000000001 /* TranslationPerformanceDiagnostics.swift */; };
+		E9D1A0032000000000000001 /* TextSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0042000000000000001 /* TextSupport.swift */; };
+		E9D1A0052000000000000001 /* PronunciationSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0062000000000000001 /* PronunciationSupport.swift */; };
+		E9D1A0072000000000000001 /* WorkspaceUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0082000000000000001 /* WorkspaceUI.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +33,9 @@
 		E9FE498D297C425200104027 /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
 		E9A000002000000000000001 /* GlobalHotKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotKey.swift; sourceTree = "<group>"; };
 		E9D1A0022000000000000001 /* TranslationPerformanceDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationPerformanceDiagnostics.swift; sourceTree = "<group>"; };
+		E9D1A0042000000000000001 /* TextSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSupport.swift; sourceTree = "<group>"; };
+		E9D1A0062000000000000001 /* PronunciationSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationSupport.swift; sourceTree = "<group>"; };
+		E9D1A0082000000000000001 /* WorkspaceUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceUI.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -72,6 +78,9 @@
 				E9FE498D297C425200104027 /* Constants.swift */,
 				E9A000002000000000000001 /* GlobalHotKey.swift */,
 				E9D1A0022000000000000001 /* TranslationPerformanceDiagnostics.swift */,
+				E9D1A0042000000000000001 /* TextSupport.swift */,
+				E9D1A0062000000000000001 /* PronunciationSupport.swift */,
+				E9D1A0082000000000000001 /* WorkspaceUI.swift */,
 			);
 			path = translate;
 			sourceTree = "<group>";
@@ -153,6 +162,9 @@
 				E9FE498E297C425200104027 /* Constants.swift in Sources */,
 				E9A000012000000000000001 /* GlobalHotKey.swift in Sources */,
 				E9D1A0012000000000000001 /* TranslationPerformanceDiagnostics.swift in Sources */,
+				E9D1A0032000000000000001 /* TextSupport.swift in Sources */,
+				E9D1A0052000000000000001 /* PronunciationSupport.swift in Sources */,
+				E9D1A0072000000000000001 /* WorkspaceUI.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
