@@ -162,7 +162,7 @@ extension ViewController {
         highlightAlignment(in: view, range: selection.range, color: .systemYellow)
         showAlignmentNotice(interfaceText("正在定位对应句…", "Finding corresponding text…"))
 
-        guard let request = googleTranslationRequest(
+        guard let request = TranslationServiceCoordinator.googleTranslationRequest(
             for: selection.text,
             sourceLanguage: sourceLanguage,
             targetLanguage: targetLanguage
@@ -176,7 +176,9 @@ extension ViewController {
         alignmentTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             let responseReceivedAt = CACurrentMediaTime()
             let parsingStartedAt = responseReceivedAt
-            let translated = data.flatMap(Self.translationText(from:))
+            let translated = data.flatMap(
+                TranslationServiceCoordinator.translationText(from:)
+            )
             let parsingCompletedAt = CACurrentMediaTime()
             let succeeded = error == nil &&
                 (response as? HTTPURLResponse).map({ 200..<300 ~= $0.statusCode }) == true &&

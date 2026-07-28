@@ -26,6 +26,8 @@
 		E9D1A0112000000000000001 /* TranslateFeaturePreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0122000000000000001 /* TranslateFeaturePreferences.swift */; };
 		E9D1A0152000000000000001 /* ViewController+Alignment.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0162000000000000001 /* ViewController+Alignment.swift */; };
 		E9D1A0172000000000000001 /* ViewController+Speech.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0182000000000000001 /* ViewController+Speech.swift */; };
+		E9D1A0192000000000000001 /* TranslationServiceCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A01A2000000000000001 /* TranslationServiceCoordinator.swift */; };
+		E9D1A01B2000000000000001 /* ViewController+UserScripts.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A01C2000000000000001 /* ViewController+UserScripts.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -50,6 +52,8 @@
 		E9D1A0122000000000000001 /* TranslateFeaturePreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslateFeaturePreferences.swift; sourceTree = "<group>"; };
 		E9D1A0162000000000000001 /* ViewController+Alignment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+Alignment.swift"; sourceTree = "<group>"; };
 		E9D1A0182000000000000001 /* ViewController+Speech.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+Speech.swift"; sourceTree = "<group>"; };
+		E9D1A01A2000000000000001 /* TranslationServiceCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationServiceCoordinator.swift; sourceTree = "<group>"; };
+		E9D1A01C2000000000000001 /* ViewController+UserScripts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+UserScripts.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -102,6 +106,8 @@
 				E9D1A0122000000000000001 /* TranslateFeaturePreferences.swift */,
 				E9D1A0162000000000000001 /* ViewController+Alignment.swift */,
 				E9D1A0182000000000000001 /* ViewController+Speech.swift */,
+				E9D1A01A2000000000000001 /* TranslationServiceCoordinator.swift */,
+				E9D1A01C2000000000000001 /* ViewController+UserScripts.swift */,
 			);
 			path = translate;
 			sourceTree = "<group>";
@@ -193,6 +199,8 @@
 				E9D1A0112000000000000001 /* TranslateFeaturePreferences.swift in Sources */,
 				E9D1A0152000000000000001 /* ViewController+Alignment.swift in Sources */,
 				E9D1A0172000000000000001 /* ViewController+Speech.swift in Sources */,
+				E9D1A0192000000000000001 /* TranslationServiceCoordinator.swift in Sources */,
+				E9D1A01B2000000000000001 /* ViewController+UserScripts.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
