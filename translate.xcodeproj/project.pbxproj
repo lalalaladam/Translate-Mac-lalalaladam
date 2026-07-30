@@ -16,6 +16,47 @@
 		E9FE498E297C425200104027 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9FE498D297C425200104027 /* Constants.swift */; };
 		E9A000012000000000000001 /* GlobalHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9A000002000000000000001 /* GlobalHotKey.swift */; };
 		E9D1A0012000000000000001 /* TranslationPerformanceDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0022000000000000001 /* TranslationPerformanceDiagnostics.swift */; };
+		E9D1A0032000000000000001 /* TextSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0042000000000000001 /* TextSupport.swift */; };
+		E9D1A0052000000000000001 /* PronunciationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0062000000000000001 /* PronunciationService.swift */; };
+		E9D1A0072000000000000001 /* WorkspaceUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0082000000000000001 /* WorkspaceUI.swift */; };
+		E9D1A0092000000000000001 /* ShortcutSettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A00A2000000000000001 /* ShortcutSettingsWindowController.swift */; };
+		E9D1A00B2000000000000001 /* ShortcutPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A00C2000000000000001 /* ShortcutPreferences.swift */; };
+		E9D1A00D2000000000000001 /* AppInterfaceLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A00E2000000000000001 /* AppInterfaceLanguage.swift */; };
+		E9D1A00F2000000000000001 /* TranslateLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0102000000000000001 /* TranslateLanguage.swift */; };
+		E9D1A0112000000000000001 /* TranslateFeaturePreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0122000000000000001 /* TranslateFeaturePreferences.swift */; };
+		E9D1A0152000000000000001 /* ViewController+Alignment.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0162000000000000001 /* ViewController+Alignment.swift */; };
+		E9D1A0172000000000000001 /* ViewController+Speech.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0182000000000000001 /* ViewController+Speech.swift */; };
+		E9D1A0192000000000000001 /* TranslationServiceCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A01A2000000000000001 /* TranslationServiceCoordinator.swift */; };
+		E9D1A01B2000000000000001 /* ViewController+UserScripts.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A01C2000000000000001 /* ViewController+UserScripts.swift */; };
+		E9D1A01D2000000000000001 /* ViewController+TranslationSubmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A01E2000000000000001 /* ViewController+TranslationSubmission.swift */; };
+		E9D1A01F2000000000000001 /* ViewController+TranslationWebService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0202000000000000001 /* ViewController+TranslationWebService.swift */; };
+		E9D1A0212000000000000001 /* ViewController+LongTextTranslationOrchestration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0222000000000000001 /* ViewController+LongTextTranslationOrchestration.swift */; };
+		E9D1A0232000000000000001 /* ViewController+TranslationAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0242000000000000001 /* ViewController+TranslationAPI.swift */; };
+		E9D1A0252000000000000001 /* ViewController+TranslationPageConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0262000000000000001 /* ViewController+TranslationPageConfiguration.swift */; };
+		E9D1A0312000000000000001 /* TranslationPageConfigurationScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0322000000000000001 /* TranslationPageConfigurationScript.swift */; };
+		E9D1A0332000000000000001 /* TranslationPageStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0342000000000000001 /* TranslationPageStyles.swift */; };
+		E9D1A0352000000000000001 /* ViewController+TranslationDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0362000000000000001 /* ViewController+TranslationDiagnostics.swift */; };
+		E9D1A0372000000000000001 /* ViewController+Lifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0382000000000000001 /* ViewController+Lifecycle.swift */; };
+		E9D1A0392000000000000001 /* ViewController+Appearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0402000000000000001 /* ViewController+Appearance.swift */; };
+		E9D1A0412000000000000001 /* ViewController+Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0422000000000000001 /* ViewController+Commands.swift */; };
+		E9D1A0432000000000000001 /* ViewController+ScriptMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0442000000000000001 /* ViewController+ScriptMessages.swift */; };
+		E9D1A0452000000000000001 /* ViewController+GoogleWebTranslation.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0462000000000000001 /* ViewController+GoogleWebTranslation.swift */; };
+		E9D1A0472000000000000001 /* ViewController+TranslationResultPolling.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0482000000000000001 /* ViewController+TranslationResultPolling.swift */; };
+		E9D1A0272000000000000001 /* ViewController+TranslationWorkspaceLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0282000000000000001 /* ViewController+TranslationWorkspaceLayout.swift */; };
+		E9D1A0292000000000000001 /* ViewController+LanguageSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A02A2000000000000001 /* ViewController+LanguageSelection.swift */; };
+		E9D1A02B2000000000000001 /* ViewController+TranslationWorkspacePresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A02C2000000000000001 /* ViewController+TranslationWorkspacePresentation.swift */; };
+		E9D1A02D2000000000000001 /* ViewController+TextInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A02E2000000000000001 /* ViewController+TextInput.swift */; };
+		E9D1A0492000000000000001 /* GooglePronunciationLookup.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0502000000000000001 /* GooglePronunciationLookup.swift */; };
+		E9D1A0512000000000000001 /* ViewController+WindowBehaviorBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0522000000000000001 /* ViewController+WindowBehaviorBar.swift */; };
+		E9D1A0532000000000000001 /* ViewController+ConnectionOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0542000000000000001 /* ViewController+ConnectionOverlay.swift */; };
+		E9D1A0552000000000000001 /* ViewController+PronunciationPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0562000000000000001 /* ViewController+PronunciationPresentation.swift */; };
+		E9D1A0572000000000000001 /* TranslationServiceCoordinator+TextProcessing.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0582000000000000001 /* TranslationServiceCoordinator+TextProcessing.swift */; };
+		E9D1A0592000000000000001 /* AppDelegate+StatusItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0602000000000000001 /* AppDelegate+StatusItem.swift */; };
+		E9D1A0612000000000000001 /* AppDelegate+MainMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0622000000000000001 /* AppDelegate+MainMenu.swift */; };
+		E9D1A0632000000000000001 /* AppDelegate+LanguageMenus.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0642000000000000001 /* AppDelegate+LanguageMenus.swift */; };
+		E9D1A0652000000000000001 /* AppDelegate+PreferencesWindows.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0662000000000000001 /* AppDelegate+PreferencesWindows.swift */; };
+		E9D1A0672000000000000001 /* AppDelegate+WindowBehavior.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0682000000000000001 /* AppDelegate+WindowBehavior.swift */; };
+		E9D1A0692000000000000001 /* AppDelegate+MenuActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0702000000000000001 /* AppDelegate+MenuActions.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +71,47 @@
 		E9FE498D297C425200104027 /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
 		E9A000002000000000000001 /* GlobalHotKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotKey.swift; sourceTree = "<group>"; };
 		E9D1A0022000000000000001 /* TranslationPerformanceDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationPerformanceDiagnostics.swift; sourceTree = "<group>"; };
+		E9D1A0042000000000000001 /* TextSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSupport.swift; sourceTree = "<group>"; };
+		E9D1A0062000000000000001 /* PronunciationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationService.swift; sourceTree = "<group>"; };
+		E9D1A0082000000000000001 /* WorkspaceUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceUI.swift; sourceTree = "<group>"; };
+		E9D1A00A2000000000000001 /* ShortcutSettingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutSettingsWindowController.swift; sourceTree = "<group>"; };
+		E9D1A00C2000000000000001 /* ShortcutPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutPreferences.swift; sourceTree = "<group>"; };
+		E9D1A00E2000000000000001 /* AppInterfaceLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInterfaceLanguage.swift; sourceTree = "<group>"; };
+		E9D1A0102000000000000001 /* TranslateLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslateLanguage.swift; sourceTree = "<group>"; };
+		E9D1A0122000000000000001 /* TranslateFeaturePreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslateFeaturePreferences.swift; sourceTree = "<group>"; };
+		E9D1A0162000000000000001 /* ViewController+Alignment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+Alignment.swift"; sourceTree = "<group>"; };
+		E9D1A0182000000000000001 /* ViewController+Speech.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+Speech.swift"; sourceTree = "<group>"; };
+		E9D1A01A2000000000000001 /* TranslationServiceCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationServiceCoordinator.swift; sourceTree = "<group>"; };
+		E9D1A01C2000000000000001 /* ViewController+UserScripts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+UserScripts.swift"; sourceTree = "<group>"; };
+		E9D1A01E2000000000000001 /* ViewController+TranslationSubmission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+TranslationSubmission.swift"; sourceTree = "<group>"; };
+		E9D1A0202000000000000001 /* ViewController+TranslationWebService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+TranslationWebService.swift"; sourceTree = "<group>"; };
+		E9D1A0222000000000000001 /* ViewController+LongTextTranslationOrchestration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+LongTextTranslationOrchestration.swift"; sourceTree = "<group>"; };
+		E9D1A0242000000000000001 /* ViewController+TranslationAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+TranslationAPI.swift"; sourceTree = "<group>"; };
+		E9D1A0262000000000000001 /* ViewController+TranslationPageConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+TranslationPageConfiguration.swift"; sourceTree = "<group>"; };
+		E9D1A0322000000000000001 /* TranslationPageConfigurationScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationPageConfigurationScript.swift; sourceTree = "<group>"; };
+		E9D1A0342000000000000001 /* TranslationPageStyles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationPageStyles.swift; sourceTree = "<group>"; };
+		E9D1A0362000000000000001 /* ViewController+TranslationDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+TranslationDiagnostics.swift"; sourceTree = "<group>"; };
+		E9D1A0382000000000000001 /* ViewController+Lifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+Lifecycle.swift"; sourceTree = "<group>"; };
+		E9D1A0402000000000000001 /* ViewController+Appearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+Appearance.swift"; sourceTree = "<group>"; };
+		E9D1A0422000000000000001 /* ViewController+Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+Commands.swift"; sourceTree = "<group>"; };
+		E9D1A0442000000000000001 /* ViewController+ScriptMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+ScriptMessages.swift"; sourceTree = "<group>"; };
+		E9D1A0462000000000000001 /* ViewController+GoogleWebTranslation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+GoogleWebTranslation.swift"; sourceTree = "<group>"; };
+		E9D1A0482000000000000001 /* ViewController+TranslationResultPolling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+TranslationResultPolling.swift"; sourceTree = "<group>"; };
+		E9D1A0282000000000000001 /* ViewController+TranslationWorkspaceLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+TranslationWorkspaceLayout.swift"; sourceTree = "<group>"; };
+		E9D1A02A2000000000000001 /* ViewController+LanguageSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+LanguageSelection.swift"; sourceTree = "<group>"; };
+		E9D1A02C2000000000000001 /* ViewController+TranslationWorkspacePresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+TranslationWorkspacePresentation.swift"; sourceTree = "<group>"; };
+		E9D1A02E2000000000000001 /* ViewController+TextInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+TextInput.swift"; sourceTree = "<group>"; };
+		E9D1A0502000000000000001 /* GooglePronunciationLookup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooglePronunciationLookup.swift; sourceTree = "<group>"; };
+		E9D1A0522000000000000001 /* ViewController+WindowBehaviorBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+WindowBehaviorBar.swift"; sourceTree = "<group>"; };
+		E9D1A0542000000000000001 /* ViewController+ConnectionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+ConnectionOverlay.swift"; sourceTree = "<group>"; };
+		E9D1A0562000000000000001 /* ViewController+PronunciationPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewController+PronunciationPresentation.swift"; sourceTree = "<group>"; };
+		E9D1A0582000000000000001 /* TranslationServiceCoordinator+TextProcessing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TranslationServiceCoordinator+TextProcessing.swift"; sourceTree = "<group>"; };
+		E9D1A0602000000000000001 /* AppDelegate+StatusItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDelegate+StatusItem.swift"; sourceTree = "<group>"; };
+		E9D1A0622000000000000001 /* AppDelegate+MainMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDelegate+MainMenu.swift"; sourceTree = "<group>"; };
+		E9D1A0642000000000000001 /* AppDelegate+LanguageMenus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDelegate+LanguageMenus.swift"; sourceTree = "<group>"; };
+		E9D1A0662000000000000001 /* AppDelegate+PreferencesWindows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDelegate+PreferencesWindows.swift"; sourceTree = "<group>"; };
+		E9D1A0682000000000000001 /* AppDelegate+WindowBehavior.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDelegate+WindowBehavior.swift"; sourceTree = "<group>"; };
+		E9D1A0702000000000000001 /* AppDelegate+MenuActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDelegate+MenuActions.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -72,6 +154,47 @@
 				E9FE498D297C425200104027 /* Constants.swift */,
 				E9A000002000000000000001 /* GlobalHotKey.swift */,
 				E9D1A0022000000000000001 /* TranslationPerformanceDiagnostics.swift */,
+				E9D1A0042000000000000001 /* TextSupport.swift */,
+				E9D1A0062000000000000001 /* PronunciationService.swift */,
+				E9D1A0082000000000000001 /* WorkspaceUI.swift */,
+				E9D1A00A2000000000000001 /* ShortcutSettingsWindowController.swift */,
+				E9D1A00C2000000000000001 /* ShortcutPreferences.swift */,
+				E9D1A00E2000000000000001 /* AppInterfaceLanguage.swift */,
+				E9D1A0102000000000000001 /* TranslateLanguage.swift */,
+				E9D1A0122000000000000001 /* TranslateFeaturePreferences.swift */,
+				E9D1A0162000000000000001 /* ViewController+Alignment.swift */,
+				E9D1A0182000000000000001 /* ViewController+Speech.swift */,
+				E9D1A01A2000000000000001 /* TranslationServiceCoordinator.swift */,
+				E9D1A01C2000000000000001 /* ViewController+UserScripts.swift */,
+				E9D1A01E2000000000000001 /* ViewController+TranslationSubmission.swift */,
+				E9D1A0202000000000000001 /* ViewController+TranslationWebService.swift */,
+				E9D1A0222000000000000001 /* ViewController+LongTextTranslationOrchestration.swift */,
+				E9D1A0242000000000000001 /* ViewController+TranslationAPI.swift */,
+				E9D1A0262000000000000001 /* ViewController+TranslationPageConfiguration.swift */,
+				E9D1A0322000000000000001 /* TranslationPageConfigurationScript.swift */,
+				E9D1A0342000000000000001 /* TranslationPageStyles.swift */,
+				E9D1A0362000000000000001 /* ViewController+TranslationDiagnostics.swift */,
+				E9D1A0382000000000000001 /* ViewController+Lifecycle.swift */,
+				E9D1A0402000000000000001 /* ViewController+Appearance.swift */,
+				E9D1A0422000000000000001 /* ViewController+Commands.swift */,
+				E9D1A0442000000000000001 /* ViewController+ScriptMessages.swift */,
+				E9D1A0462000000000000001 /* ViewController+GoogleWebTranslation.swift */,
+				E9D1A0482000000000000001 /* ViewController+TranslationResultPolling.swift */,
+				E9D1A0282000000000000001 /* ViewController+TranslationWorkspaceLayout.swift */,
+				E9D1A02A2000000000000001 /* ViewController+LanguageSelection.swift */,
+				E9D1A02C2000000000000001 /* ViewController+TranslationWorkspacePresentation.swift */,
+				E9D1A02E2000000000000001 /* ViewController+TextInput.swift */,
+				E9D1A0502000000000000001 /* GooglePronunciationLookup.swift */,
+				E9D1A0522000000000000001 /* ViewController+WindowBehaviorBar.swift */,
+				E9D1A0542000000000000001 /* ViewController+ConnectionOverlay.swift */,
+				E9D1A0562000000000000001 /* ViewController+PronunciationPresentation.swift */,
+				E9D1A0582000000000000001 /* TranslationServiceCoordinator+TextProcessing.swift */,
+				E9D1A0602000000000000001 /* AppDelegate+StatusItem.swift */,
+				E9D1A0622000000000000001 /* AppDelegate+MainMenu.swift */,
+				E9D1A0642000000000000001 /* AppDelegate+LanguageMenus.swift */,
+				E9D1A0662000000000000001 /* AppDelegate+PreferencesWindows.swift */,
+				E9D1A0682000000000000001 /* AppDelegate+WindowBehavior.swift */,
+				E9D1A0702000000000000001 /* AppDelegate+MenuActions.swift */,
 			);
 			path = translate;
 			sourceTree = "<group>";
@@ -153,6 +276,47 @@
 				E9FE498E297C425200104027 /* Constants.swift in Sources */,
 				E9A000012000000000000001 /* GlobalHotKey.swift in Sources */,
 				E9D1A0012000000000000001 /* TranslationPerformanceDiagnostics.swift in Sources */,
+				E9D1A0032000000000000001 /* TextSupport.swift in Sources */,
+				E9D1A0052000000000000001 /* PronunciationService.swift in Sources */,
+				E9D1A0072000000000000001 /* WorkspaceUI.swift in Sources */,
+				E9D1A0092000000000000001 /* ShortcutSettingsWindowController.swift in Sources */,
+				E9D1A00B2000000000000001 /* ShortcutPreferences.swift in Sources */,
+				E9D1A00D2000000000000001 /* AppInterfaceLanguage.swift in Sources */,
+				E9D1A00F2000000000000001 /* TranslateLanguage.swift in Sources */,
+				E9D1A0112000000000000001 /* TranslateFeaturePreferences.swift in Sources */,
+				E9D1A0152000000000000001 /* ViewController+Alignment.swift in Sources */,
+				E9D1A0172000000000000001 /* ViewController+Speech.swift in Sources */,
+				E9D1A0192000000000000001 /* TranslationServiceCoordinator.swift in Sources */,
+				E9D1A01B2000000000000001 /* ViewController+UserScripts.swift in Sources */,
+				E9D1A01D2000000000000001 /* ViewController+TranslationSubmission.swift in Sources */,
+				E9D1A01F2000000000000001 /* ViewController+TranslationWebService.swift in Sources */,
+				E9D1A0212000000000000001 /* ViewController+LongTextTranslationOrchestration.swift in Sources */,
+				E9D1A0232000000000000001 /* ViewController+TranslationAPI.swift in Sources */,
+				E9D1A0252000000000000001 /* ViewController+TranslationPageConfiguration.swift in Sources */,
+				E9D1A0312000000000000001 /* TranslationPageConfigurationScript.swift in Sources */,
+				E9D1A0332000000000000001 /* TranslationPageStyles.swift in Sources */,
+				E9D1A0352000000000000001 /* ViewController+TranslationDiagnostics.swift in Sources */,
+				E9D1A0372000000000000001 /* ViewController+Lifecycle.swift in Sources */,
+				E9D1A0392000000000000001 /* ViewController+Appearance.swift in Sources */,
+				E9D1A0412000000000000001 /* ViewController+Commands.swift in Sources */,
+				E9D1A0432000000000000001 /* ViewController+ScriptMessages.swift in Sources */,
+				E9D1A0452000000000000001 /* ViewController+GoogleWebTranslation.swift in Sources */,
+				E9D1A0472000000000000001 /* ViewController+TranslationResultPolling.swift in Sources */,
+				E9D1A0272000000000000001 /* ViewController+TranslationWorkspaceLayout.swift in Sources */,
+				E9D1A0292000000000000001 /* ViewController+LanguageSelection.swift in Sources */,
+				E9D1A02B2000000000000001 /* ViewController+TranslationWorkspacePresentation.swift in Sources */,
+				E9D1A02D2000000000000001 /* ViewController+TextInput.swift in Sources */,
+				E9D1A0492000000000000001 /* GooglePronunciationLookup.swift in Sources */,
+				E9D1A0512000000000000001 /* ViewController+WindowBehaviorBar.swift in Sources */,
+				E9D1A0532000000000000001 /* ViewController+ConnectionOverlay.swift in Sources */,
+				E9D1A0552000000000000001 /* ViewController+PronunciationPresentation.swift in Sources */,
+				E9D1A0572000000000000001 /* TranslationServiceCoordinator+TextProcessing.swift in Sources */,
+				E9D1A0592000000000000001 /* AppDelegate+StatusItem.swift in Sources */,
+				E9D1A0612000000000000001 /* AppDelegate+MainMenu.swift in Sources */,
+				E9D1A0632000000000000001 /* AppDelegate+LanguageMenus.swift in Sources */,
+				E9D1A0652000000000000001 /* AppDelegate+PreferencesWindows.swift in Sources */,
+				E9D1A0672000000000000001 /* AppDelegate+WindowBehavior.swift in Sources */,
+				E9D1A0692000000000000001 /* AppDelegate+MenuActions.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
