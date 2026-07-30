@@ -18,6 +18,7 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+#if DEBUG
 	<key>TranslateGitCommit</key>
 	<string>$(GIT_COMMIT_HASH)</string>
 	<key>TranslateGitWorkingTreeStatus</key>
@@ -26,6 +27,7 @@
 	<string>$(BUILD_TIMESTAMP)</string>
 	<key>TranslateDebugBuildIdentifier</key>
 	<string>$(DEBUG_BUILD_IDENTIFIER)</string>
+#endif
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>
