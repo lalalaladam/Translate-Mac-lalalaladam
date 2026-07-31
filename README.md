@@ -88,6 +88,7 @@ All shortcuts can be changed from **Translate** (`翻译`) → **Shortcut Settin
 | --- | --- |
 | `⌘\\` | Show or hide the window globally (`全局显示或隐藏窗口`) |
 | `⌘W` | Close/hide the window without quitting (`关闭/隐藏窗口但不退出应用`) |
+| `⌘M` | Minimize the window to the Dock (`将窗口最小化到程序坞`) |
 | `⌘H` | Hide the application (`隐藏应用`) |
 | `⌘Q` | Quit the application (`退出应用`) |
 | `⌘A` | Select all source text (`选中全部原文`) |

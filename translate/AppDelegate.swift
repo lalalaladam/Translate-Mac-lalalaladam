@@ -36,6 +36,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var targetLanguageRootItem: NSMenuItem?
     var languageSummaryItem: NSMenuItem?
     var shortcutSettingsController: ShortcutSettingsWindowController?
+    var aboutWindowController: AboutWindowController?
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
 #if DEBUG

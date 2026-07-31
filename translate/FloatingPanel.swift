@@ -27,6 +27,7 @@ class FloatingPanel: NSPanel {
             .resizable,
             .titled,
             .closable,
+            .miniaturizable,
             .fullSizeContentView
         ]
         if TranslateWindowPreferences.showOnAllSpaces {

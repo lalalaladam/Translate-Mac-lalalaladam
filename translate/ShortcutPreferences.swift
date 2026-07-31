@@ -7,6 +7,7 @@ import Carbon.HIToolbox
 enum ShortcutAction: String, CaseIterable {
     case showHideWindow
     case closeWindow
+    case minimizeWindow
     case hideApplication
     case quitApplication
     case selectAllSource
@@ -26,6 +27,8 @@ enum ShortcutAction: String, CaseIterable {
             return interfaceText("显示或隐藏窗口", "Show or Hide Window")
         case .closeWindow:
             return interfaceText("关闭窗口", "Close Window")
+        case .minimizeWindow:
+            return interfaceText("最小化窗口", "Minimize Window")
         case .hideApplication:
             return interfaceText("隐藏应用", "Hide Application")
         case .quitApplication:
@@ -59,6 +62,8 @@ enum ShortcutAction: String, CaseIterable {
             return ShortcutBinding(keyCode: kVK_ANSI_Backslash, modifiers: [.command], keyEquivalent: "\\")
         case .closeWindow:
             return ShortcutBinding(keyCode: kVK_ANSI_W, modifiers: [.command], keyEquivalent: "w")
+        case .minimizeWindow:
+            return ShortcutBinding(keyCode: kVK_ANSI_M, modifiers: [.command], keyEquivalent: "m")
         case .hideApplication:
             return ShortcutBinding(keyCode: kVK_ANSI_H, modifiers: [.command], keyEquivalent: "h")
         case .quitApplication:

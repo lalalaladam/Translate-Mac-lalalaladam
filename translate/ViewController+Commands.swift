@@ -103,6 +103,8 @@ extension ViewController {
         case .closeWindow:
             stopSpeaking()
             view.window?.performClose(nil)
+        case .minimizeWindow:
+            view.window?.miniaturize(nil)
         case .hideApplication:
             stopSpeaking()
             NSApp.hide(nil)

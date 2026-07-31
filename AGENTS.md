@@ -86,6 +86,10 @@ Rules:
 - Build Number must remain numeric for macOS and Xcode compatibility.
 - Do not put a Git hash or timestamp into `CFBundleVersion`.
 - Public release UI must not display Debug trace metadata.
+- Release builds may hide only Debug trace metadata from About.
+- Permanent Attribution / Credits, including GitHub information, original
+  author attribution, original project information, and license or
+  acknowledgement information, must remain visible.
 
 ### Local Debug Build
 
@@ -136,56 +140,27 @@ A Debug build may represent:
 
 Therefore, the commit hash alone is insufficient to describe the exact source state. The Status field must clarify whether the build exactly matches the commit.
 
-## About Window Layout
+## About Window
 
-Keep the standard macOS About window structure:
+The About window uses a custom native, non-scrollable implementation.
 
-1. Application icon
-2. Application name
-3. Standard version line:
+Before creating, modifying, debugging, or reviewing any About-window code,
+read and follow:
 
-       Version X.Y.Z (Build N)
+`docs/ABOUT_WINDOW_REQUIREMENTS.md`
 
-4. Debug metadata section, for Debug builds only:
+That document is mandatory for all About-window work and defines:
 
-       Version: vX.Y.Z
-       Build: N
-       Commit: <hash>
-       Status: <clean/dirty>
-       Build Time: <timestamp>
+- required content, order, and permanent Attribution / Credits protection
+- menu action and controller ownership
+- safe construction and presentation
+- absolute no-scroll requirements
+- deterministic sizing and alignment
+- configuration-scoped runtime verification
 
-5. Attribution / Credits section
+Do not use the system standard About panel or change the About implementation
+without checking that document first.
 
-Keep permanent project information, including:
-
-- GitHub information
-- Original author attribution
-- Original project information
-- License or acknowledgement information
-
-Rules:
-
-- Official releases hide only the Debug metadata section.
-- Official releases must keep Attribution / Credits information.
-- Never remove copyright, author attribution, or open-source acknowledgement information.
-
-### About Window Sizing and Scrolling
-
-The About window must not contain scrollable content in any build configuration.
-
-This applies to Debug, Release, Archive, local test, and official public builds.
-
-Rules:
-
-- Do not place About window content inside `ScrollView`, `NSScrollView`, or another scrollable container.
-- Do not merely hide scroll indicators while leaving the content scrollable.
-- The initial window size must display all visible content without vertical or horizontal scrolling.
-- When Debug metadata is present, enlarge the About window to fit the additional content.
-- Increase width and height proportionally so the window remains visually balanced.
-- The Debug About window may be larger than the Release About window.
-- Size the window using the content's intrinsic layout requirements.
-- Do not solve overflow by clipping content, hiding Credits, removing attribution, or reducing text to an unreadable size.
-- The application icon, application name, version information, Debug metadata when applicable, and Attribution / Credits must all be visible at the same time.
 
 ## Runtime Identification
 
