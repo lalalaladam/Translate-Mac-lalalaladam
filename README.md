@@ -6,6 +6,7 @@ A native macOS translation workspace with a glass interface, multilingual suppor
 
 | Version | Main Changes |
 |---|---|
+| v1.0.17 | No changes were made to the functionality; the huge Swift file was split up (没有改变功能，拆分了巨大的swift文件) |
 | v1.0.16 | Added source-text alignment context menu and translation logging (新增原文对齐右键菜单和翻译日志功能) |
 | v1.0.15 | Improved translation diagnostics, IME handling, and build traceability (改进翻译诊断、输入法处理以及构建追踪能力) |
 | v1.0.14 | Improved long-text translation performance and diagnostics (改进长文本翻译性能和诊断功能) |
