@@ -26,7 +26,9 @@ class AlignmentTextView: NSTextView {
 
 final class TranslationSourceTextView: AlignmentTextView {
     private var hasPendingImmediatePaste = false
+    private var beginsNewSessionAfterPaste = false
     private let sourceUndoGrouping = SourceTextUndoGrouping()
+    private(set) var isPerformingHistoryNavigation = false
     var onPasteReceived: ((String?) -> Void)?
 
     func consumeImmediatePasteFlag() -> Bool {
@@ -47,8 +49,12 @@ final class TranslationSourceTextView: AlignmentTextView {
         )
     }
 
-    func completeUndoGroupingAfterTextChange() {
+    func completeUndoGroupingAfterTextChange() -> Bool {
         sourceUndoGrouping.textDidChange(in: self)
+        guard beginsNewSessionAfterPaste else { return false }
+        beginsNewSessionAfterPaste = false
+        sourceUndoGrouping.beginNewSession(in: self)
+        return true
     }
 
     func finishPendingIMEUndoGrouping() {
@@ -59,12 +65,16 @@ final class TranslationSourceTextView: AlignmentTextView {
         sourceUndoGrouping.beginNewSession(in: self)
     }
 
-    func performGroupedUndo(_ action: () -> Bool) -> Bool {
-        sourceUndoGrouping.performUndo(in: self, action: action)
+    func performGroupedUndo() -> Bool {
+        isPerformingHistoryNavigation = true
+        defer { isPerformingHistoryNavigation = false }
+        return sourceUndoGrouping.performUndo(in: self)
     }
 
-    func performGroupedRedo(_ action: () -> Bool) -> Bool {
-        sourceUndoGrouping.performRedo(in: self, action: action)
+    func performGroupedRedo() -> Bool {
+        isPerformingHistoryNavigation = true
+        defer { isPerformingHistoryNavigation = false }
+        return sourceUndoGrouping.performRedo(in: self)
     }
 
     override func setMarkedText(
@@ -86,7 +96,15 @@ final class TranslationSourceTextView: AlignmentTextView {
     }
 
     override func paste(_ sender: Any?) {
+        let sourceBeforePaste = string
         hasPendingImmediatePaste = true
+        let selection = selectedRange()
+        // Replacing the complete source is a new document. Once the paste is
+        // committed, discard the preceding document's undo history and keep
+        // the pasted text as the new baseline.
+        beginsNewSessionAfterPaste = !string.isEmpty &&
+            selection.location == 0 &&
+            selection.length == (string as NSString).length
         let pasteboardText = NSPasteboard.general.string(forType: .string)
         onPasteReceived?(pasteboardText)
         logTextPipelineSnapshot(
@@ -96,9 +114,17 @@ final class TranslationSourceTextView: AlignmentTextView {
         if let text = PlainTextPasteboardReader.read(from: .general) {
             logTextPipelineSnapshot("2-plain-text-reader-output", text)
             insertText(text, replacementRange: selectedRange())
+            if string == sourceBeforePaste {
+                hasPendingImmediatePaste = false
+                beginsNewSessionAfterPaste = false
+            }
             return
         }
         super.paste(sender)
+        if string == sourceBeforePaste {
+            hasPendingImmediatePaste = false
+            beginsNewSessionAfterPaste = false
+        }
     }
 }
 

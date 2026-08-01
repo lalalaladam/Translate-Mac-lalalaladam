@@ -92,6 +92,7 @@ extension ViewController {
     }
 
     func findCorrespondingText(from view: NSTextView, isSource: Bool) {
+        invalidateAlignmentPresentation()
         let lookupStartedAt = CACurrentMediaTime()
         alignmentRequestCount += 1
         let diagnosticRequestID = 1_000_000 + alignmentRequestCount
@@ -156,9 +157,6 @@ extension ViewController {
         let generation = alignmentRequestGeneration
         let selectedTextSnapshot = view.string
         let oppositeTextSnapshot = oppositeView.string
-        alignmentTask?.cancel()
-        clearAlignmentHighlights(in: view)
-        clearAlignmentHighlights(in: oppositeView)
         highlightAlignment(in: view, range: selection.range, color: .systemYellow)
         showAlignmentNotice(interfaceText("正在定位对应句…", "Finding corresponding text…"))
 
@@ -166,7 +164,15 @@ extension ViewController {
             for: selection.text,
             sourceLanguage: sourceLanguage,
             targetLanguage: targetLanguage
-        ) else { return }
+        ) else {
+            invalidateAlignmentPresentation()
+            TranslationPerformanceDiagnostics.shared.finish(
+                requestID: diagnosticRequestID,
+                stage: "alignment-finished",
+                status: "invalid-request"
+            )
+            return
+        }
         let requestSubmittedAt = CACurrentMediaTime()
         TranslationPerformanceDiagnostics.shared.recordDetailed(
             requestID: diagnosticRequestID,
@@ -213,6 +219,7 @@ extension ViewController {
                         stage: "alignment-finished",
                         status: "failed"
                     )
+                    self.invalidateAlignmentPresentation()
                     self.showAlignmentNotice(interfaceText("定位失败", "Lookup failed"))
                     return
                 }
@@ -227,6 +234,7 @@ extension ViewController {
                         stage: "alignment-finished",
                         status: "no-candidate"
                     )
+                    self.invalidateAlignmentPresentation()
                     self.showAlignmentNotice(interfaceText("未找到候选", "No candidate found"))
                     return
                 }
@@ -349,25 +357,67 @@ extension ViewController {
         return Double(left.intersection(right).count) / Double(left.union(right).count)
     }
 
-    private func clearAlignmentHighlights(in view: NSTextView) {
-        guard let storage = view.textStorage else { return }
-        let fullRange = NSRange(location: 0, length: storage.length)
-        storage.enumerateAttribute(alignmentHighlightMarker, in: fullRange) { value, range, _ in
-            guard value != nil else { return }
-            storage.removeAttribute(.backgroundColor, range: range)
-            storage.removeAttribute(self.alignmentHighlightMarker, range: range)
+    func invalidateAlignmentPresentation() {
+        guard alignmentTask != nil ||
+                sourceAlignmentHighlightRange != nil ||
+                translationAlignmentHighlightRange != nil ||
+                isShowingAlignmentPresentation else {
+            return
+        }
+        alignmentRequestGeneration += 1
+        alignmentTask?.cancel()
+        alignmentTask = nil
+        clearAlignmentHighlight(in: longTextSourceView, isSource: true)
+        clearAlignmentHighlight(in: longTextTranslationView, isSource: false)
+        isShowingAlignmentPresentation = false
+        longTextStatusLabel?.stringValue = longTextStatusText()
+    }
+
+    private func clearAlignmentHighlight(in view: NSTextView?, isSource: Bool) {
+        let storedRange = isSource
+            ? sourceAlignmentHighlightRange
+            : translationAlignmentHighlightRange
+        if let view, let storedRange,
+           storedRange.location <= view.string.utf16.count {
+            let validLength = min(
+                storedRange.length,
+                view.string.utf16.count - storedRange.location
+            )
+            if validLength > 0 {
+                view.layoutManager?.removeTemporaryAttribute(
+                    .backgroundColor,
+                    forCharacterRange: NSRange(
+                        location: storedRange.location,
+                        length: validLength
+                    )
+                )
+            }
+        }
+        if isSource {
+            sourceAlignmentHighlightRange = nil
+        } else {
+            translationAlignmentHighlightRange = nil
         }
     }
 
     private func highlightAlignment(in view: NSTextView, range: NSRange, color: NSColor) {
-        view.textStorage?.addAttributes([
-            .backgroundColor: color.withAlphaComponent(0.34),
-            alignmentHighlightMarker: true
-        ], range: range)
+        let isSource = view === longTextSourceView
+        clearAlignmentHighlight(in: view, isSource: isSource)
+        view.layoutManager?.addTemporaryAttribute(
+            .backgroundColor,
+            value: color.withAlphaComponent(0.34),
+            forCharacterRange: range
+        )
+        if isSource {
+            sourceAlignmentHighlightRange = range
+        } else {
+            translationAlignmentHighlightRange = range
+        }
         view.scrollRangeToVisible(range)
     }
 
     private func showAlignmentNotice(_ text: String) {
+        isShowingAlignmentPresentation = true
         longTextStatusLabel?.stringValue = text
     }
 

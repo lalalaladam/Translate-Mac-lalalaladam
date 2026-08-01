@@ -13,13 +13,21 @@ extension ViewController {
         session: Int,
         provisional: Bool = false
     ) {
+        let timingRequestID = translationTimingRequest.flatMap {
+            $0.session == session ? $0.id : nil
+        } ?? 0
         guard isCurrentTranslationWork(session: session),
               let request = TranslationServiceCoordinator.googleTranslationRequest(
                   for: chunk,
                   sourceLanguage: longTextSourceLanguage,
                   targetLanguage: longTextTargetLanguage
               ) else {
-            logTranslationCoordinator("fallback-cancelled-as-stale", source: longTextSource)
+            logTranslationCoordinator(
+                "fallback-cancelled-as-stale",
+                source: longTextSource,
+                requestID: timingRequestID,
+                session: session
+            )
             return
         }
         logTranslationTiming(provisional ? "api-provisional-started" : "api-fallback-started")
@@ -47,7 +55,9 @@ extension ViewController {
                       requestedChunkIndex == self.translationCoordinator.chunkIndex else {
                     self?.logTranslationCoordinator(
                         "fallback-cancelled-as-stale",
-                        source: self?.longTextSource
+                        source: self?.longTextSource,
+                        requestID: timingRequestID,
+                        session: session
                     )
                     return
                 }

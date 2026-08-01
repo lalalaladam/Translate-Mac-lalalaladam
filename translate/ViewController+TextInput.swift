@@ -24,6 +24,7 @@ extension ViewController {
               let sourceView = textView as? TranslationSourceTextView else {
             return true
         }
+        invalidateAlignmentPresentation()
         sourceView.prepareUndoGrouping(
             affectedRange: affectedCharRange,
             replacementString: replacementString
@@ -42,8 +43,15 @@ extension ViewController {
             logTranslationCoordinator("native-text-change-ignored-unexpected-view")
             return
         }
-        (sourceView as? TranslationSourceTextView)?
-            .completeUndoGroupingAfterTextChange()
+        let typedSourceView = sourceView as? TranslationSourceTextView
+        let beganNewUndoSession = typedSourceView?
+            .completeUndoGroupingAfterTextChange() == true
+        if beganNewUndoSession {
+            logTranslationCoordinator(
+                "native-full-replacement-started-new-undo-session",
+                source: sourceView.string
+            )
+        }
         logTranslationCoordinator("native-text-change-received", source: sourceView.string)
         if sourceView.hasMarkedText() {
             logInputMethodTiming("text-did-change-marked-text")
@@ -141,6 +149,9 @@ extension ViewController {
 
     func handleCommittedNativeTextChange(_ sourceView: NSTextView) {
         let source = sourceView.string
+        let typedSourceView = sourceView as? TranslationSourceTextView
+        let isPaste = typedSourceView?.consumeImmediatePasteFlag() == true
+        let isHistoryNavigation = typedSourceView?.isPerformingHistoryNavigation == true
         logTranslationCoordinator("native-text-committed", source: source)
         if source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             stopSpeaking()
@@ -153,24 +164,29 @@ extension ViewController {
         let previousWithoutTrailingLineBreaks = longTextSource?.trimmingCharacters(in: .newlines)
         if !sourceWithoutTrailingLineBreaks.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            sourceWithoutTrailingLineBreaks == previousWithoutTrailingLineBreaks {
+            longTextSource = source
+            updateLongTextLabels()
             logTranslationCoordinator("native-text-change-ignored-formatting-only", source: source)
             return
         }
 
-        let isPaste = (sourceView as? TranslationSourceTextView)?
-            .consumeImmediatePasteFlag() == true
         logTranslationCoordinator(
-            isPaste ? "native-paste-submission-queued" : "native-text-submission-queued",
+            isPaste
+                ? "native-paste-submission-queued"
+                : (isHistoryNavigation
+                    ? "native-history-submission-queued"
+                    : "native-text-submission-queued"),
             source: source
         )
         queueLongTextTranslation(
             source,
-            mode: isPaste ? .immediate : .debouncedNativeInput
+            mode: isPaste || isHistoryNavigation ? .immediate : .debouncedNativeInput
         )
     }
 
     @objc func workspaceClearSource() {
         stopSpeaking()
+        invalidateAlignmentPresentation()
         isUpdatingNativeWorkspace = true
         longTextSourceView?.string = ""
         isUpdatingNativeWorkspace = false

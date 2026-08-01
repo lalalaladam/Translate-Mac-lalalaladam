@@ -123,16 +123,24 @@ extension ViewController {
             swapLanguages()
         case .undo:
             if let sourceView = longTextSourceView as? TranslationSourceTextView {
-                return sourceView.performGroupedUndo {
-                    NSApp.sendAction(Selector(("undo:")), to: nil, from: sourceView)
-                }
+                let performed = sourceView.performGroupedUndo()
+                logTranslationCoordinator(
+                    performed ? "native-undo-command-performed" : "native-undo-command-noop",
+                    source: sourceView.string,
+                    requestID: 0
+                )
+                return true
             }
             return NSApp.sendAction(Selector(("undo:")), to: nil, from: longTextSourceView ?? webView)
         case .redo:
             if let sourceView = longTextSourceView as? TranslationSourceTextView {
-                return sourceView.performGroupedRedo {
-                    NSApp.sendAction(Selector(("redo:")), to: nil, from: sourceView)
-                }
+                let performed = sourceView.performGroupedRedo()
+                logTranslationCoordinator(
+                    performed ? "native-redo-command-performed" : "native-redo-command-noop",
+                    source: sourceView.string,
+                    requestID: 0
+                )
+                return true
             }
             return NSApp.sendAction(Selector(("redo:")), to: nil, from: longTextSourceView ?? webView)
         case .cut:

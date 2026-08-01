@@ -138,7 +138,9 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var alignmentRequestGeneration = 0
     var alignmentRequestCount = 0
     var alignmentTask: URLSessionDataTask?
-    let alignmentHighlightMarker = NSAttributedString.Key("com.lalalaladam.translate.alignmentHighlight")
+    var sourceAlignmentHighlightRange: NSRange?
+    var translationAlignmentHighlightRange: NSRange?
+    var isShowingAlignmentPresentation = false
     var longTextStatusLabel: NSTextField?
     var longTextSourceLabel: NSTextField?
     var longTextTranslationLabel: NSTextField?

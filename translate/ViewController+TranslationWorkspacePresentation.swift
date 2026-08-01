@@ -280,6 +280,7 @@ extension ViewController {
 
     @objc func closeLongTextMode() {
         stopSpeaking()
+        invalidateAlignmentPresentation()
         translationCoordinator.debounceWorkItem?.cancel()
         translationCoordinator.session += 1
         longTextOverlay?.isHidden = true

@@ -129,6 +129,7 @@ extension ViewController {
             logTranslationCoordinator("language-swap-skipped-automatic-source")
             return
         }
+        invalidateAlignmentPresentation()
 
         // A multi-part translation is only safe to swap after every part has
         // completed. Prefer the current native result pane, which is the

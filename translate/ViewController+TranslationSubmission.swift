@@ -320,6 +320,7 @@ extension ViewController {
         _ source: String,
         mode: TranslationSubmissionMode = .immediate
     ) {
+        invalidateAlignmentPresentation()
         cancelPendingTranslationDebounce(source: source)
         guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             clearLongTextTranslationForEmptyInput()

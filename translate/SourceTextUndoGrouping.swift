@@ -129,11 +129,13 @@ final class SourceTextUndoGrouping {
         resetGroupingState()
     }
 
-    func performUndo(in textView: NSTextView, action: () -> Bool) -> Bool {
+    func performUndo(in textView: NSTextView) -> Bool {
         endCurrentGroup(in: textView)
+        guard let undoManager = textView.undoManager,
+              undoManager.canUndo else { return false }
         let operation = undoOperations.last
-        let succeeded = action()
-        guard succeeded, let operation else { return succeeded }
+        undoManager.undo()
+        guard let operation else { return true }
 
         undoOperations.removeLast()
         redoOperations.append(operation)
@@ -141,11 +143,13 @@ final class SourceTextUndoGrouping {
         return true
     }
 
-    func performRedo(in textView: NSTextView, action: () -> Bool) -> Bool {
+    func performRedo(in textView: NSTextView) -> Bool {
         endCurrentGroup(in: textView)
+        guard let undoManager = textView.undoManager,
+              undoManager.canRedo else { return false }
         let operation = redoOperations.last
-        let succeeded = action()
-        guard succeeded, let operation else { return succeeded }
+        undoManager.redo()
+        guard let operation else { return true }
 
         redoOperations.removeLast()
         undoOperations.append(operation)
