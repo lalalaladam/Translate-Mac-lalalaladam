@@ -57,6 +57,7 @@
 		E9D1A0652000000000000001 /* AppDelegate+PreferencesWindows.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0662000000000000001 /* AppDelegate+PreferencesWindows.swift */; };
 		E9D1A0672000000000000001 /* AppDelegate+WindowBehavior.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0682000000000000001 /* AppDelegate+WindowBehavior.swift */; };
 		E9D1A0692000000000000001 /* AppDelegate+MenuActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0702000000000000001 /* AppDelegate+MenuActions.swift */; };
+		E9D1A0712000000000000001 /* SourceTextUndoGrouping.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1A0722000000000000001 /* SourceTextUndoGrouping.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -112,6 +113,7 @@
 		E9D1A0662000000000000001 /* AppDelegate+PreferencesWindows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDelegate+PreferencesWindows.swift"; sourceTree = "<group>"; };
 		E9D1A0682000000000000001 /* AppDelegate+WindowBehavior.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDelegate+WindowBehavior.swift"; sourceTree = "<group>"; };
 		E9D1A0702000000000000001 /* AppDelegate+MenuActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDelegate+MenuActions.swift"; sourceTree = "<group>"; };
+		E9D1A0722000000000000001 /* SourceTextUndoGrouping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceTextUndoGrouping.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -195,6 +197,7 @@
 				E9D1A0662000000000000001 /* AppDelegate+PreferencesWindows.swift */,
 				E9D1A0682000000000000001 /* AppDelegate+WindowBehavior.swift */,
 				E9D1A0702000000000000001 /* AppDelegate+MenuActions.swift */,
+				E9D1A0722000000000000001 /* SourceTextUndoGrouping.swift */,
 			);
 			path = translate;
 			sourceTree = "<group>";
@@ -317,6 +320,7 @@
 				E9D1A0652000000000000001 /* AppDelegate+PreferencesWindows.swift in Sources */,
 				E9D1A0672000000000000001 /* AppDelegate+WindowBehavior.swift in Sources */,
 				E9D1A0692000000000000001 /* AppDelegate+MenuActions.swift in Sources */,
+				E9D1A0712000000000000001 /* SourceTextUndoGrouping.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

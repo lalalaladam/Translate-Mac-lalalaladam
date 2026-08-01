@@ -85,7 +85,11 @@ enum ShortcutAction: String, CaseIterable {
         case .undo:
             return ShortcutBinding(keyCode: kVK_ANSI_Z, modifiers: [.command], keyEquivalent: "z")
         case .redo:
-            return ShortcutBinding(keyCode: kVK_ANSI_R, modifiers: [.command], keyEquivalent: "r")
+            return ShortcutBinding(
+                keyCode: kVK_ANSI_Z,
+                modifiers: [.command, .shift],
+                keyEquivalent: "z"
+            )
         case .cut:
             return ShortcutBinding(keyCode: kVK_ANSI_X, modifiers: [.command], keyEquivalent: "x")
         case .copy:
@@ -189,6 +193,16 @@ struct ShortcutPreferences {
         guard let data = UserDefaults.standard.data(forKey: key),
               let saved = try? JSONDecoder().decode([String: ShortcutBinding].self, from: data),
               let binding = saved[action.rawValue] else {
+            return action.defaultBinding
+        }
+        // Migrate the former built-in Command-R binding to the standard
+        // Shift-Command-Z default shown in Shortcut Settings.
+        if action == .redo,
+           binding == ShortcutBinding(
+               keyCode: kVK_ANSI_R,
+               modifiers: [.command],
+               keyEquivalent: "r"
+           ) {
             return action.defaultBinding
         }
         return binding

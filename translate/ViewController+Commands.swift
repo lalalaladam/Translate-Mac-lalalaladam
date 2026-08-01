@@ -122,8 +122,18 @@ extension ViewController {
         case .swapLanguages:
             swapLanguages()
         case .undo:
+            if let sourceView = longTextSourceView as? TranslationSourceTextView {
+                return sourceView.performGroupedUndo {
+                    NSApp.sendAction(Selector(("undo:")), to: nil, from: sourceView)
+                }
+            }
             return NSApp.sendAction(Selector(("undo:")), to: nil, from: longTextSourceView ?? webView)
         case .redo:
+            if let sourceView = longTextSourceView as? TranslationSourceTextView {
+                return sourceView.performGroupedRedo {
+                    NSApp.sendAction(Selector(("redo:")), to: nil, from: sourceView)
+                }
+            }
             return NSApp.sendAction(Selector(("redo:")), to: nil, from: longTextSourceView ?? webView)
         case .cut:
             return NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: longTextSourceView ?? webView)

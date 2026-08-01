@@ -26,12 +26,63 @@ class AlignmentTextView: NSTextView {
 
 final class TranslationSourceTextView: AlignmentTextView {
     private var hasPendingImmediatePaste = false
+    private let sourceUndoGrouping = SourceTextUndoGrouping()
     var onPasteReceived: ((String?) -> Void)?
 
     func consumeImmediatePasteFlag() -> Bool {
         let pending = hasPendingImmediatePaste
         hasPendingImmediatePaste = false
         return pending
+    }
+
+    func prepareUndoGrouping(
+        affectedRange: NSRange,
+        replacementString: String?
+    ) {
+        sourceUndoGrouping.prepareChange(
+            in: self,
+            affectedRange: affectedRange,
+            replacementString: replacementString,
+            isPaste: hasPendingImmediatePaste
+        )
+    }
+
+    func completeUndoGroupingAfterTextChange() {
+        sourceUndoGrouping.textDidChange(in: self)
+    }
+
+    func finishPendingIMEUndoGrouping() {
+        sourceUndoGrouping.finishPendingComposition(in: self)
+    }
+
+    func beginNewUndoSession() {
+        sourceUndoGrouping.beginNewSession(in: self)
+    }
+
+    func performGroupedUndo(_ action: () -> Bool) -> Bool {
+        sourceUndoGrouping.performUndo(in: self, action: action)
+    }
+
+    func performGroupedRedo(_ action: () -> Bool) -> Bool {
+        sourceUndoGrouping.performRedo(in: self, action: action)
+    }
+
+    override func setMarkedText(
+        _ string: Any,
+        selectedRange: NSRange,
+        replacementRange: NSRange
+    ) {
+        sourceUndoGrouping.willSetMarkedText(in: self)
+        super.setMarkedText(
+            string,
+            selectedRange: selectedRange,
+            replacementRange: replacementRange
+        )
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        sourceUndoGrouping.didUnmarkText(in: self)
     }
 
     override func paste(_ sender: Any?) {

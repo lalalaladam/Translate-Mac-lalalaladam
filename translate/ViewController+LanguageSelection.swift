@@ -202,6 +202,7 @@ extension ViewController {
             longTextSourceView?.string = swappedSource
             longTextTranslationView?.string = ""
             isUpdatingNativeWorkspace = false
+            beginNewSourceUndoSession()
             longTextSourceView?.scrollRangeToVisible(NSRange(location: 0, length: 0))
             longTextTranslationView?.scrollRangeToVisible(NSRange(location: 0, length: 0))
             let status = setLongTextStatus(.preparing)

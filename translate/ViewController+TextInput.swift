@@ -6,6 +6,31 @@
 import Cocoa
 
 extension ViewController {
+    /// Starts a new source document after an explicit app-level replacement.
+    /// User edits deliberately keep AppKit's normal undo history, but a clear
+    /// action or language swap must never let Command-Z resurrect a previous
+    /// translation's source text.
+    func beginNewSourceUndoSession() {
+        (longTextSourceView as? TranslationSourceTextView)?.beginNewUndoSession()
+    }
+
+    func textView(
+        _ textView: NSTextView,
+        shouldChangeTextIn affectedCharRange: NSRange,
+        replacementString: String?
+    ) -> Bool {
+        guard textView === longTextSourceView,
+              !isUpdatingNativeWorkspace,
+              let sourceView = textView as? TranslationSourceTextView else {
+            return true
+        }
+        sourceView.prepareUndoGrouping(
+            affectedRange: affectedCharRange,
+            replacementString: replacementString
+        )
+        return true
+    }
+
     func textDidChange(_ notification: Notification) {
         guard !isUpdatingNativeWorkspace else {
             logTranslationCoordinator("native-text-change-ignored-workspace-update")
@@ -17,6 +42,8 @@ extension ViewController {
             logTranslationCoordinator("native-text-change-ignored-unexpected-view")
             return
         }
+        (sourceView as? TranslationSourceTextView)?
+            .completeUndoGroupingAfterTextChange()
         logTranslationCoordinator("native-text-change-received", source: sourceView.string)
         if sourceView.hasMarkedText() {
             logInputMethodTiming("text-did-change-marked-text")
@@ -78,6 +105,8 @@ extension ViewController {
 
             if settling {
                 self.imeCompositionEndCheck = nil
+                (sourceView as? TranslationSourceTextView)?
+                    .finishPendingIMEUndoGrouping()
                 let source = sourceView.string
                 guard self.longTextSource != source else { return }
                 self.logInputMethodTiming("ime-composition-ended-auto-submit")
@@ -145,6 +174,7 @@ extension ViewController {
         isUpdatingNativeWorkspace = true
         longTextSourceView?.string = ""
         isUpdatingNativeWorkspace = false
+        beginNewSourceUndoSession()
         queueLongTextTranslation("")
         longTextSourceView?.window?.makeFirstResponder(longTextSourceView)
     }
