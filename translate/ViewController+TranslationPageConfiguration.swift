@@ -8,6 +8,20 @@ import WebKit
 
 extension ViewController {
     func configureTranslationPageAfterDOMReady(_ webView: WKWebView) {
+        if webView === parallelTranslationWebView {
+            guard translationPageMatches(
+                source: parallelTranslationSource,
+                target: parallelTranslationTarget,
+                in: parallelTranslationWebView
+            ) else {
+                return
+            }
+            parallelTranslationWebViewLoading = false
+            parallelTranslationWebViewReady = true
+            installTranslationTimingRuntime(in: webView)
+            logStartupTiming("Parallel translation service ready")
+            return
+        }
         logStartupTiming(webView === automaticTranslationWebView
             ? "Automatic DOM ready"
             : "Primary DOM ready")

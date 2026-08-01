@@ -153,11 +153,27 @@ enum PlainTextPasteboardReader {
     }
 
     private static func minimallySanitized(_ text: String) -> String {
-        // U+FFFC represents an attachment rather than visible text. NUL cannot be
-        // displayed by NSTextView/HTMLTextAreaElement. Preserve every whitespace,
-        // line separator, tab and all other Unicode content byte-for-byte.
-        text.unicodeScalars.reduce(into: "") { result, scalar in
-            if scalar.value != 0 && scalar.value != 0xFFFC {
+        // RTF itself never reaches the translator: AppKit has already exposed its
+        // visible plain-text representation. Word does, however, commonly retain
+        // invisible layout controls in that string. Normalize only controls which
+        // are not visible text, preserve tabs and language-sensitive joiners, and use NFC
+        // so the WebView sees the same text representation as ordinary pasteboards.
+        text.replacingOccurrences(of: "\r\n", with: "\n")
+            .precomposedStringWithCanonicalMapping
+            .unicodeScalars.reduce(into: "") {
+            result, scalar in
+            switch scalar.value {
+            case 0, 0x00AD, 0x200B, 0x2060, 0xFEFF, 0xFFFC:
+                // NUL, soft hyphen, zero-width space, word joiner, BOM and
+                // attachment placeholders are not visible source text.
+                break
+            case 0x000D, 0x2028, 0x2029:
+                // Word may use CR, line separator, or paragraph separator.
+                result.append("\n")
+            case 0x00A0, 0x2007, 0x202F:
+                // Convert Word's non-breaking spaces to ordinary source spaces.
+                result.append(" ")
+            default:
                 result.unicodeScalars.append(scalar)
             }
         }

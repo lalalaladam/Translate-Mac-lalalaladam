@@ -72,12 +72,18 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var webView: WebView!
     var automaticTranslationWebView: BackgroundTranslationWebView!
     var standbyTranslationWebView: WebView!
+    var parallelTranslationWebView: BackgroundTranslationWebView!
     weak var activeTranslationWebView: WKWebView?
     var automaticTranslationWebViewReady = false
     var automaticTranslationWebViewLoading = false
     var automaticTranslationTarget = TranslateLanguagePreferences.target
     var standbyTranslationWebViewReady = false
     var standbyTranslationWebViewLoading = false
+    var parallelTranslationWebViewReady = false
+    var parallelTranslationWebViewLoading = false
+    var parallelTranslationSource = TranslateLanguagePreferences.source
+    var parallelTranslationTarget = TranslateLanguagePreferences.target
+    var parallelWebTranslationBatch: ParallelWebTranslationBatch?
     var pendingAutomaticTranslationSource: String?
     var pendingAutomaticTranslationSession: Int?
     var pendingPrimaryTranslationSource: String?

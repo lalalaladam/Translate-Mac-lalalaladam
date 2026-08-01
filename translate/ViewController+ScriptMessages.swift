@@ -36,6 +36,8 @@ extension ViewController: WKScriptMessageHandler {
                     serviceWebView = automaticTranslationWebView
                 case "standby":
                     serviceWebView = standbyTranslationWebView
+                case "parallel":
+                    serviceWebView = parallelTranslationWebView
                 default:
                     serviceWebView = webView
                 }

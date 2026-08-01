@@ -167,6 +167,14 @@ final class TranslationServiceCoordinator {
         candidateUpdatedAt = nil
     }
 
+    func enableConcurrentAPIFallback() {
+        usesConcurrentAPIBatch = true
+        concurrentAPITasks.values.forEach { $0.cancel() }
+        concurrentAPITasks.removeAll(keepingCapacity: true)
+        concurrentAPIResults.removeAll(keepingCapacity: true)
+        concurrentAPIRetryCounts.removeAll(keepingCapacity: true)
+    }
+
     func clearAfterEmptyInput() {
         clearCompletedSnapshot()
         clearTranslationBuffers()

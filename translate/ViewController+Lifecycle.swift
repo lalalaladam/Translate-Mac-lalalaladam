@@ -147,6 +147,25 @@ extension ViewController {
         standbyTranslationWebView.underPageBackgroundColor = .clear
         standbyTranslationWebView.setValue(false, forKey: "drawsBackground")
         standbyTranslationWebView.alphaValue = backgroundTranslationWebViewAlpha
+
+        // Keep a second page for the active language pair ready after the
+        // primary service has settled. It lets a two-part long document use
+        // two independent Google textareas without replacing the reverse-page
+        // standby used by the language-swap feature.
+        let parallelConfig = WKWebViewConfiguration()
+        parallelConfig.userContentController.add(self, name: "callbackHandler")
+        installUserScripts(on: parallelConfig.userContentController)
+        parallelTranslationWebView = BackgroundTranslationWebView(
+            frame: webView.frame,
+            configuration: parallelConfig
+        )
+        parallelTranslationWebView.autoresizingMask = [.width, .height]
+        parallelTranslationWebView.navigationDelegate = self
+        parallelTranslationWebView.wantsLayer = true
+        parallelTranslationWebView.layer?.backgroundColor = .clear
+        parallelTranslationWebView.underPageBackgroundColor = .clear
+        parallelTranslationWebView.setValue(false, forKey: "drawsBackground")
+        parallelTranslationWebView.alphaValue = backgroundTranslationWebViewAlpha
         activeTranslationWebView = webView
         logStartupTiming("WebViews created")
 
@@ -158,6 +177,7 @@ extension ViewController {
         )
         rootView.addSubview(automaticTranslationWebView)
         rootView.addSubview(standbyTranslationWebView)
+        rootView.addSubview(parallelTranslationWebView)
         rootView.addSubview(webView)
         self.view = rootView
     }
