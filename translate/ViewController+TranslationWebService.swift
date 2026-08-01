@@ -147,6 +147,11 @@ extension ViewController {
         didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error
     ) {
+        if webView === parallelTranslationWebView {
+            parallelTranslationWebViewReady = false
+            parallelTranslationWebViewLoading = false
+            return
+        }
         if webView === standbyTranslationWebView {
             standbyTranslationWebViewReady = false
             standbyTranslationWebViewLoading = false
@@ -165,6 +170,11 @@ extension ViewController {
         didFail navigation: WKNavigation!,
         withError error: Error
     ) {
+        if webView === parallelTranslationWebView {
+            parallelTranslationWebViewReady = false
+            parallelTranslationWebViewLoading = false
+            return
+        }
         if webView === standbyTranslationWebView {
             standbyTranslationWebViewReady = false
             standbyTranslationWebViewLoading = false
@@ -181,7 +191,9 @@ extension ViewController {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         let label = webView === automaticTranslationWebView
             ? "Automatic"
-            : (webView === standbyTranslationWebView ? "Standby" : "Primary")
+            : (webView === standbyTranslationWebView
+                ? "Standby"
+                : (webView === parallelTranslationWebView ? "Parallel" : "Primary"))
         logStartupTiming("\(label) navigation finished")
         waitForTranslationDOM(in: webView)
     }
@@ -189,7 +201,9 @@ extension ViewController {
     func waitForTranslationDOM(in webView: WKWebView) {
         let service = webView === automaticTranslationWebView
             ? "automatic"
-            : (webView === standbyTranslationWebView ? "standby" : "primary")
+            : (webView === standbyTranslationWebView
+                ? "standby"
+                : (webView === parallelTranslationWebView ? "parallel" : "primary"))
         webView.evaluateJavaScript(#"""
             (() => {
                 const notify = () => {
@@ -248,7 +262,12 @@ extension ViewController {
         // By the time this fires, an immediate cold-start request has normally
         // produced its first result; the standby remains ready for a later swap.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.warmStandbyTranslationServiceForReverseDirection()
+            guard let self else { return }
+            self.warmStandbyTranslationServiceForReverseDirection()
+            self.warmParallelTranslationService(
+                source: self.currentSourceLanguage,
+                target: self.currentTargetLanguage
+            )
         }
     }
 
@@ -343,6 +362,40 @@ extension ViewController {
             URLRequest(
                 url: translationURL(source: .automatic, target: target),
                 cachePolicy: .useProtocolCachePolicy,
+                timeoutInterval: 15
+            )
+        )
+    }
+
+    func warmParallelTranslationService(
+        source: TranslateLanguage,
+        target: TranslateLanguage
+    ) {
+        guard isReady,
+              target.canBeTarget,
+              let activeTranslationWebView,
+              translationPageMatches(
+                  source: source,
+                  target: target,
+                  in: activeTranslationWebView
+              ) else {
+            return
+        }
+        if parallelTranslationSource == source,
+           parallelTranslationTarget == target,
+           parallelTranslationWebViewReady || parallelTranslationWebViewLoading {
+            return
+        }
+
+        parallelTranslationSource = source
+        parallelTranslationTarget = target
+        parallelTranslationWebViewReady = false
+        parallelTranslationWebViewLoading = true
+        logStartupTiming("Parallel same-direction page load started")
+        parallelTranslationWebView.load(
+            URLRequest(
+                url: translationURL(source: source, target: target),
+                cachePolicy: .returnCacheDataElseLoad,
                 timeoutInterval: 15
             )
         )

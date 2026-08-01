@@ -41,7 +41,7 @@ extension AppDelegate {
 
         let aboutItem = NSMenuItem(
             title: interfaceText("关于 Translate", "About Translate"),
-            action: #selector(showAboutPanel),
+            action: #selector(showTranslateCustomAbout(_:)),
             keyEquivalent: ""
         )
         aboutItem.target = self
@@ -114,6 +114,7 @@ extension AppDelegate {
 
         addLanguageMenu(to: mainMenu)
         addInterfaceLanguageMenu(to: mainMenu)
+        addWindowMenu(to: mainMenu)
 
         NSApp.mainMenu = mainMenu
     }
@@ -139,6 +140,15 @@ extension AppDelegate {
         applyShortcut(.closeWindow, to: closeItem)
         closeItem.target = self
         windowMenu.addItem(closeItem)
+
+        let minimizeItem = NSMenuItem(
+            title: interfaceText("最小化", "Minimize"),
+            action: #selector(minimizeWindowFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        applyShortcut(.minimizeWindow, to: minimizeItem)
+        minimizeItem.target = self
+        windowMenu.addItem(minimizeItem)
         windowMenu.addItem(.separator())
 
         TranslateWindowBehavior.allCases.forEach { behavior in

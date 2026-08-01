@@ -26,6 +26,9 @@ class AlignmentTextView: NSTextView {
 
 final class TranslationSourceTextView: AlignmentTextView {
     private var hasPendingImmediatePaste = false
+    private var beginsNewSessionAfterPaste = false
+    private let sourceUndoGrouping = SourceTextUndoGrouping()
+    private(set) var isPerformingHistoryNavigation = false
     var onPasteReceived: ((String?) -> Void)?
 
     func consumeImmediatePasteFlag() -> Bool {
@@ -34,8 +37,74 @@ final class TranslationSourceTextView: AlignmentTextView {
         return pending
     }
 
+    func prepareUndoGrouping(
+        affectedRange: NSRange,
+        replacementString: String?
+    ) {
+        sourceUndoGrouping.prepareChange(
+            in: self,
+            affectedRange: affectedRange,
+            replacementString: replacementString,
+            isPaste: hasPendingImmediatePaste
+        )
+    }
+
+    func completeUndoGroupingAfterTextChange() -> Bool {
+        sourceUndoGrouping.textDidChange(in: self)
+        guard beginsNewSessionAfterPaste else { return false }
+        beginsNewSessionAfterPaste = false
+        sourceUndoGrouping.beginNewSession(in: self)
+        return true
+    }
+
+    func finishPendingIMEUndoGrouping() {
+        sourceUndoGrouping.finishPendingComposition(in: self)
+    }
+
+    func beginNewUndoSession() {
+        sourceUndoGrouping.beginNewSession(in: self)
+    }
+
+    func performGroupedUndo() -> Bool {
+        isPerformingHistoryNavigation = true
+        defer { isPerformingHistoryNavigation = false }
+        return sourceUndoGrouping.performUndo(in: self)
+    }
+
+    func performGroupedRedo() -> Bool {
+        isPerformingHistoryNavigation = true
+        defer { isPerformingHistoryNavigation = false }
+        return sourceUndoGrouping.performRedo(in: self)
+    }
+
+    override func setMarkedText(
+        _ string: Any,
+        selectedRange: NSRange,
+        replacementRange: NSRange
+    ) {
+        sourceUndoGrouping.willSetMarkedText(in: self)
+        super.setMarkedText(
+            string,
+            selectedRange: selectedRange,
+            replacementRange: replacementRange
+        )
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        sourceUndoGrouping.didUnmarkText(in: self)
+    }
+
     override func paste(_ sender: Any?) {
+        let sourceBeforePaste = string
         hasPendingImmediatePaste = true
+        let selection = selectedRange()
+        // Replacing the complete source is a new document. Once the paste is
+        // committed, discard the preceding document's undo history and keep
+        // the pasted text as the new baseline.
+        beginsNewSessionAfterPaste = !string.isEmpty &&
+            selection.location == 0 &&
+            selection.length == (string as NSString).length
         let pasteboardText = NSPasteboard.general.string(forType: .string)
         onPasteReceived?(pasteboardText)
         logTextPipelineSnapshot(
@@ -45,9 +114,17 @@ final class TranslationSourceTextView: AlignmentTextView {
         if let text = PlainTextPasteboardReader.read(from: .general) {
             logTextPipelineSnapshot("2-plain-text-reader-output", text)
             insertText(text, replacementRange: selectedRange())
+            if string == sourceBeforePaste {
+                hasPendingImmediatePaste = false
+                beginsNewSessionAfterPaste = false
+            }
             return
         }
         super.paste(sender)
+        if string == sourceBeforePaste {
+            hasPendingImmediatePaste = false
+            beginsNewSessionAfterPaste = false
+        }
     }
 }
 
@@ -153,11 +230,27 @@ enum PlainTextPasteboardReader {
     }
 
     private static func minimallySanitized(_ text: String) -> String {
-        // U+FFFC represents an attachment rather than visible text. NUL cannot be
-        // displayed by NSTextView/HTMLTextAreaElement. Preserve every whitespace,
-        // line separator, tab and all other Unicode content byte-for-byte.
-        text.unicodeScalars.reduce(into: "") { result, scalar in
-            if scalar.value != 0 && scalar.value != 0xFFFC {
+        // RTF itself never reaches the translator: AppKit has already exposed its
+        // visible plain-text representation. Word does, however, commonly retain
+        // invisible layout controls in that string. Normalize only controls which
+        // are not visible text, preserve tabs and language-sensitive joiners, and use NFC
+        // so the WebView sees the same text representation as ordinary pasteboards.
+        text.replacingOccurrences(of: "\r\n", with: "\n")
+            .precomposedStringWithCanonicalMapping
+            .unicodeScalars.reduce(into: "") {
+            result, scalar in
+            switch scalar.value {
+            case 0, 0x00AD, 0x200B, 0x2060, 0xFEFF, 0xFFFC:
+                // NUL, soft hyphen, zero-width space, word joiner, BOM and
+                // attachment placeholders are not visible source text.
+                break
+            case 0x000D, 0x2028, 0x2029:
+                // Word may use CR, line separator, or paragraph separator.
+                result.append("\n")
+            case 0x00A0, 0x2007, 0x202F:
+                // Convert Word's non-breaking spaces to ordinary source spaces.
+                result.append(" ")
+            default:
                 result.unicodeScalars.append(scalar)
             }
         }

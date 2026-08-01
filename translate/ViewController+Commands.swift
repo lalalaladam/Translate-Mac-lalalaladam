@@ -103,6 +103,8 @@ extension ViewController {
         case .closeWindow:
             stopSpeaking()
             view.window?.performClose(nil)
+        case .minimizeWindow:
+            view.window?.miniaturize(nil)
         case .hideApplication:
             stopSpeaking()
             NSApp.hide(nil)
@@ -120,8 +122,26 @@ extension ViewController {
         case .swapLanguages:
             swapLanguages()
         case .undo:
+            if let sourceView = longTextSourceView as? TranslationSourceTextView {
+                let performed = sourceView.performGroupedUndo()
+                logTranslationCoordinator(
+                    performed ? "native-undo-command-performed" : "native-undo-command-noop",
+                    source: sourceView.string,
+                    requestID: 0
+                )
+                return true
+            }
             return NSApp.sendAction(Selector(("undo:")), to: nil, from: longTextSourceView ?? webView)
         case .redo:
+            if let sourceView = longTextSourceView as? TranslationSourceTextView {
+                let performed = sourceView.performGroupedRedo()
+                logTranslationCoordinator(
+                    performed ? "native-redo-command-performed" : "native-redo-command-noop",
+                    source: sourceView.string,
+                    requestID: 0
+                )
+                return true
+            }
             return NSApp.sendAction(Selector(("redo:")), to: nil, from: longTextSourceView ?? webView)
         case .cut:
             return NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: longTextSourceView ?? webView)

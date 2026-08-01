@@ -18,6 +18,10 @@ extension AppDelegate {
         }
     }
 
+    @objc func minimizeWindowFromMenu(_ sender: Any?) {
+        (NSApp.keyWindow ?? panel)?.miniaturize(sender)
+    }
+
     @objc func toggleWindowBehaviorFromMenu(_ sender: NSMenuItem) {
         guard let rawValue = sender.representedObject as? String,
               let behavior = TranslateWindowBehavior(rawValue: rawValue) else {

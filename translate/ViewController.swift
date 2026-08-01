@@ -72,12 +72,18 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var webView: WebView!
     var automaticTranslationWebView: BackgroundTranslationWebView!
     var standbyTranslationWebView: WebView!
+    var parallelTranslationWebView: BackgroundTranslationWebView!
     weak var activeTranslationWebView: WKWebView?
     var automaticTranslationWebViewReady = false
     var automaticTranslationWebViewLoading = false
     var automaticTranslationTarget = TranslateLanguagePreferences.target
     var standbyTranslationWebViewReady = false
     var standbyTranslationWebViewLoading = false
+    var parallelTranslationWebViewReady = false
+    var parallelTranslationWebViewLoading = false
+    var parallelTranslationSource = TranslateLanguagePreferences.source
+    var parallelTranslationTarget = TranslateLanguagePreferences.target
+    var parallelWebTranslationBatch: ParallelWebTranslationBatch?
     var pendingAutomaticTranslationSource: String?
     var pendingAutomaticTranslationSession: Int?
     var pendingPrimaryTranslationSource: String?
@@ -132,7 +138,9 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var alignmentRequestGeneration = 0
     var alignmentRequestCount = 0
     var alignmentTask: URLSessionDataTask?
-    let alignmentHighlightMarker = NSAttributedString.Key("com.lalalaladam.translate.alignmentHighlight")
+    var sourceAlignmentHighlightRange: NSRange?
+    var translationAlignmentHighlightRange: NSRange?
+    var isShowingAlignmentPresentation = false
     var longTextStatusLabel: NSTextField?
     var longTextSourceLabel: NSTextField?
     var longTextTranslationLabel: NSTextField?

@@ -90,6 +90,13 @@ extension ViewController {
             }
         }
 
+        // The active page now matches the request, so its same-direction
+        // companion can begin warming without competing with a page reload.
+        warmParallelTranslationService(
+            source: effectiveSourceLanguage,
+            target: targetLanguage
+        )
+
         // Google Translate evaluates the complete source text on every edit;
         // it does not translate a newly typed suffix and concatenate it to the
         // old result. Keep the old native result visible only until the first
@@ -255,6 +262,7 @@ extension ViewController {
 
     func invalidateActiveTranslationWork(source: String?) {
         let invalidatedRequestID = translationTimingRequest?.id
+        cancelParallelWebTranslationBatch()
         let invalidation = translationCoordinator.invalidate()
         let hadActiveRequest = translationTimingRequest != nil || invalidation.hadPipelineWork
         pendingAutomaticTranslationSource = nil
@@ -279,7 +287,7 @@ extension ViewController {
             )
         }
 
-        for serviceWebView in [webView, automaticTranslationWebView] {
+        for serviceWebView in [webView, automaticTranslationWebView, parallelTranslationWebView] {
             serviceWebView?.evaluateJavaScript(#"""
                 window.__macTranslateResultObserver?.disconnect();
                 clearTimeout(window.__macTranslateResultNotificationTimer);
@@ -312,6 +320,7 @@ extension ViewController {
         _ source: String,
         mode: TranslationSubmissionMode = .immediate
     ) {
+        invalidateAlignmentPresentation()
         cancelPendingTranslationDebounce(source: source)
         guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             clearLongTextTranslationForEmptyInput()

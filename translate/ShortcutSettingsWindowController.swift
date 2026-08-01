@@ -13,7 +13,7 @@ final class ShortcutSettingsWindowController: NSWindowController {
         self.didChangeShortcuts = didChangeShortcuts
         self.referenceWindow = referenceWindow
         let panel = ShortcutSettingsPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 590),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -66,7 +66,7 @@ final class ShortcutSettingsWindowController: NSWindowController {
         panel.title = interfaceText("快捷键设置", "Shortcut Settings")
 
         let content = ShortcutSettingsBackgroundView(
-            frame: NSRect(x: 0, y: 0, width: 560, height: 560)
+            frame: NSRect(x: 0, y: 0, width: 560, height: 590)
         )
         // Match the main translator window: a real vibrancy surface rather
         // than an opaque white utility sheet.
