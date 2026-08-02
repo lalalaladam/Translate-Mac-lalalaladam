@@ -90,13 +90,13 @@ extension ViewController {
                         translation,
                         forSource: chunk
                     )
+                    // Keep the lower-quality API result hidden while Google
+                    // Web still has time to finish. It is promoted only at
+                    // the Web deadline when no source-verified Web candidate
+                    // exists, so the first visible result never flashes from
+                    // API to Web.
                     self.translationCoordinator.provisionalFallbackTranslation = normalized
-                    self.logTranslationTiming("api-provisional-result-displayed")
-                    self.previewSingleChunkTranslationIfSafe(
-                        normalized,
-                        session: session,
-                        chunkIndex: requestedChunkIndex
-                    )
+                    self.logTranslationTiming("api-provisional-ready-hidden")
                 } else {
                     self.appendLongTextTranslation(
                         translation,

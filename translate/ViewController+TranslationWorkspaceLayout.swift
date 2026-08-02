@@ -336,7 +336,10 @@ extension ViewController {
         view.isRichText = false
         view.importsGraphics = false
         view.allowsImageEditing = false
-        view.allowsUndo = true
+        // Source history is managed by SourceTextUndoGrouping. AppKit's
+        // NSUndoTyping can enter an unbounded undoRedo loop after repeated
+        // Chinese IME edits, so never maintain a second native source stack.
+        view.allowsUndo = !editable
         // Translation output must remain byte-for-byte equivalent to the
         // service response. Do not let AppKit reinterpret dates, links,
         // quotes, dashes, spelling, or replacement text while rendering it.

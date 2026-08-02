@@ -124,6 +124,18 @@ extension ViewController {
         case .undo:
             if let sourceView = longTextSourceView as? TranslationSourceTextView {
                 let performed = sourceView.performGroupedUndo()
+                if performed {
+                    invalidateAlignmentPresentation()
+                    logTranslationCoordinator(
+                        "native-text-change-received-after-undo",
+                        source: sourceView.string,
+                        requestID: 0
+                    )
+                    handleCommittedNativeTextChange(
+                        sourceView,
+                        isHistoryNavigation: true
+                    )
+                }
                 logTranslationCoordinator(
                     performed ? "native-undo-command-performed" : "native-undo-command-noop",
                     source: sourceView.string,
@@ -135,6 +147,18 @@ extension ViewController {
         case .redo:
             if let sourceView = longTextSourceView as? TranslationSourceTextView {
                 let performed = sourceView.performGroupedRedo()
+                if performed {
+                    invalidateAlignmentPresentation()
+                    logTranslationCoordinator(
+                        "native-text-change-received-after-redo",
+                        source: sourceView.string,
+                        requestID: 0
+                    )
+                    handleCommittedNativeTextChange(
+                        sourceView,
+                        isHistoryNavigation: true
+                    )
+                }
                 logTranslationCoordinator(
                     performed ? "native-redo-command-performed" : "native-redo-command-noop",
                     source: sourceView.string,
