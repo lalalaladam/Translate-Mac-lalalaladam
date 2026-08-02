@@ -170,14 +170,11 @@ extension ViewController {
         currentSourceLanguage = currentTargetLanguage
         currentTargetLanguage = source
 
-        // With two empty panes there is no text snapshot to preserve. Treat
-        // the language pair as native editor state only. In particular, do
-        // not navigate either hidden Google page and do not touch the first
-        // responder here: an asynchronous WebKit navigation can finish while
-        // a Chinese/Japanese input method owns marked text and truncate that
-        // composition. The first committed source edit will prepare the
-        // matching background translation page without disturbing AppKit's
-        // editor lifecycle.
+        // With two empty panes there is no text snapshot to preserve. Promote
+        // an already warm reverse page immediately; this swaps only native
+        // WebView references and cannot disturb an IME-owned first responder.
+        // If it is not ready yet, continue warming that hidden standby page
+        // without navigating the active page or touching the editor.
         let panesAreEmpty = longTextSourceView?.string
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
             longTextTranslationView?.string
@@ -186,6 +183,18 @@ extension ViewController {
             languageSwapInProgress = false
             languageSwapPendingText = nil
             languageSwapSnapshotText = nil
+            if !promoteStandbyTranslationServiceIfReady(
+                source: currentSourceLanguage,
+                target: currentTargetLanguage
+            ) {
+                warmStandbyTranslationService(
+                    source: currentSourceLanguage,
+                    target: currentTargetLanguage
+                )
+                logTranslationCoordinator("language-swap-standby-warming", source: "")
+            } else {
+                logTranslationCoordinator("language-swap-standby-promoted", source: "")
+            }
             refreshWorkspaceLanguageTitles()
             logTranslationCoordinator("language-swap-ready", source: "")
             return
@@ -198,6 +207,8 @@ extension ViewController {
             longTextSource = swappedSource
             longTextTranslation = ""
             translationCoordinator.clearCompletedSnapshot()
+            translationResultProviders.removeAll()
+            completedTranslationResultProviders.removeAll()
             translationCoordinator.clearTranslationBuffers()
             isUpdatingNativeWorkspace = true
             longTextSourceView?.string = swappedSource

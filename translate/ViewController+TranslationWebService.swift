@@ -155,6 +155,7 @@ extension ViewController {
         if webView === standbyTranslationWebView {
             standbyTranslationWebViewReady = false
             standbyTranslationWebViewLoading = false
+            reloadPrimaryForPendingStandbyTranslationIfNeeded()
             return
         }
         guard webView !== automaticTranslationWebView else {
@@ -178,6 +179,7 @@ extension ViewController {
         if webView === standbyTranslationWebView {
             standbyTranslationWebViewReady = false
             standbyTranslationWebViewLoading = false
+            reloadPrimaryForPendingStandbyTranslationIfNeeded()
             return
         }
         guard webView !== automaticTranslationWebView else {
@@ -261,12 +263,18 @@ extension ViewController {
         // Do not let reverse-page warming compete with the first translation.
         // By the time this fires, an immediate cold-start request has normally
         // produced its first result; the standby remains ready for a later swap.
+        let readySourceLanguage = currentSourceLanguage
+        let readyTargetLanguage = currentTargetLanguage
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self else { return }
+            guard let self,
+                  self.currentSourceLanguage == readySourceLanguage,
+                  self.currentTargetLanguage == readyTargetLanguage else {
+                return
+            }
             self.warmStandbyTranslationServiceForReverseDirection()
             self.warmParallelTranslationService(
-                source: self.currentSourceLanguage,
-                target: self.currentTargetLanguage
+                source: readySourceLanguage,
+                target: readyTargetLanguage
             )
         }
     }
@@ -402,29 +410,37 @@ extension ViewController {
     }
 
     func warmStandbyTranslationServiceForReverseDirection() {
-        let reverseSource = currentTargetLanguage
-        let reverseTarget = currentSourceLanguage
-        guard reverseSource != .automatic,
-              reverseTarget.canBeTarget,
-              reverseSource != reverseTarget else {
+        warmStandbyTranslationService(
+            source: currentTargetLanguage,
+            target: currentSourceLanguage
+        )
+    }
+
+    func warmStandbyTranslationService(
+        source: TranslateLanguage,
+        target: TranslateLanguage
+    ) {
+        guard source != .automatic,
+              target.canBeTarget,
+              source != target else {
             standbyTranslationWebViewReady = false
             standbyTranslationWebViewLoading = false
             return
         }
-        if translationPageMatches(
-            source: reverseSource,
-            target: reverseTarget,
-            in: standbyTranslationWebView
-        ), standbyTranslationWebViewReady || standbyTranslationWebViewLoading {
+        if standbyTranslationSource == source,
+           standbyTranslationTarget == target,
+           standbyTranslationWebViewReady || standbyTranslationWebViewLoading {
             return
         }
 
+        standbyTranslationSource = source
+        standbyTranslationTarget = target
         standbyTranslationWebViewReady = false
         standbyTranslationWebViewLoading = true
         logStartupTiming("Standby reverse page load started")
         standbyTranslationWebView.load(
             URLRequest(
-                url: translationURL(source: reverseSource, target: reverseTarget),
+                url: translationURL(source: source, target: target),
                 cachePolicy: .returnCacheDataElseLoad,
                 timeoutInterval: 15
             )
@@ -436,9 +452,11 @@ extension ViewController {
         target: TranslateLanguage
     ) -> Bool {
         guard standbyTranslationWebViewReady,
+              standbyTranslationSource == source,
+              standbyTranslationTarget == target,
               translationPageMatches(
-                source: source,
-                target: target,
+                  source: source,
+                  target: target,
                 in: standbyTranslationWebView
               ) else {
             return false
@@ -449,6 +467,8 @@ extension ViewController {
         standbyTranslationWebView = previousPrimary
         // The former primary page is already the reverse of the newly active
         // pair, so it remains a ready standby without another navigation.
+        standbyTranslationSource = target
+        standbyTranslationTarget = source
         standbyTranslationWebViewReady = true
         standbyTranslationWebViewLoading = false
         activeTranslationWebView = webView
@@ -456,6 +476,27 @@ extension ViewController {
         logStartupTiming("Warm standby promoted to primary")
         logTranslationTiming("warm-standby-promoted")
         return true
+    }
+
+    func reloadPrimaryForPendingStandbyTranslationIfNeeded() {
+        guard let source = pendingPrimaryTranslationSource,
+              pendingPrimaryTranslationSession == translationCoordinator.session,
+              longTextSource == source,
+              longTextSourceView?.string == source else {
+            return
+        }
+        logTranslationTiming("standby-load-failed-primary-reload")
+        reloadPreservingSource(
+            for: .translationURL(
+                translationURL(
+                    source: translationCoordinator.effectiveSourceLanguage(
+                        for: source,
+                        selectedLanguage: currentSourceLanguage
+                    ),
+                    target: currentTargetLanguage
+                )
+            )
+        )
     }
 
     public func applyInterfaceLanguagePreservingSource() {

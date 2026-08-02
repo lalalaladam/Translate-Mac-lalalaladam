@@ -76,7 +76,28 @@ extension ViewController {
                     target: targetLanguage
                 ) {
                     activeTranslationWebView = webView
+                } else if standbyTranslationWebViewLoading,
+                          standbyTranslationSource == effectiveSourceLanguage,
+                          standbyTranslationTarget == targetLanguage {
+                    // An empty-pane swap may have started warming the exact
+                    // reverse page only moments before the first keystroke.
+                    // Wait for that isolated standby load instead of starting
+                    // a competing primary navigation for the same language
+                    // pair.
+                    pendingPrimaryTranslationSource = source
+                    pendingPrimaryTranslationSession = translationCoordinator.session
+                    logTranslationTiming("standby-warmup-awaited")
+                    return
                 } else {
+                    logTranslationTiming(
+                        "standby-promotion-missed",
+                        diagnosticFields: [
+                            "standby_ready": standbyTranslationWebViewReady,
+                            "standby_loading": standbyTranslationWebViewLoading,
+                            "standby_pair_matches": standbyTranslationSource == effectiveSourceLanguage &&
+                                standbyTranslationTarget == targetLanguage
+                        ]
+                    )
                     reloadPreservingSource(
                         for: .translationURL(
                             translationURL(
@@ -89,13 +110,6 @@ extension ViewController {
                 }
             }
         }
-
-        // The active page now matches the request, so its same-direction
-        // companion can begin warming without competing with a page reload.
-        warmParallelTranslationService(
-            source: effectiveSourceLanguage,
-            target: targetLanguage
-        )
 
         // Google Translate evaluates the complete source text on every edit;
         // it does not translate a newly typed suffix and concatenate it to the
@@ -111,6 +125,7 @@ extension ViewController {
                 translationCoordinator.completedSource
             ) == translationCoordinator.textRemovingLineBreaks(source)
         let chunks = translationCoordinator.splitLongText(source)
+        translationResultProviders.removeAll()
         // Each completed start owns one WebView channel.  A delayed DOM
         // callback from the other preloaded Google page must never complete
         // this request, even if its text happens to match the current chunk.
@@ -421,6 +436,8 @@ extension ViewController {
         invalidateActiveTranslationWork(source: "")
         longTextSource = nil
         longTextTranslation = ""
+        translationResultProviders.removeAll()
+        completedTranslationResultProviders.removeAll()
         translationCoordinator.clearAfterEmptyInput()
         longTextOverlay?.isHidden = false
 
