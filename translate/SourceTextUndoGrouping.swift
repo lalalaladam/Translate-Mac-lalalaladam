@@ -5,8 +5,8 @@
 
 import AppKit
 
-/// Adds user-visible edit boundaries while leaving storage, undo, redo, and
-/// selection restoration to NSTextView's native undo manager.
+/// Adds user-visible edit boundaries while keeping source history independent
+/// from NSTextView's native typing undo implementation.
 final class SourceTextUndoGrouping {
     private enum Operation {
         case insertion
@@ -48,12 +48,20 @@ final class SourceTextUndoGrouping {
         case atomic
     }
 
+    private struct Snapshot {
+        let text: String
+        let selection: NSRange
+        let operation: Operation
+    }
+
+    private static let maximumHistoryCount = 100
+
     private var group: Group?
     private var expectedInsertionLocation: Int?
     private var pendingBreakAfter = false
     private var isComposing = false
-    private var undoOperations: [Operation] = []
-    private var redoOperations: [Operation] = []
+    private var undoSnapshots: [Snapshot] = []
+    private var redoSnapshots: [Snapshot] = []
 
     func prepareChange(
         in textView: NSTextView,
@@ -61,10 +69,7 @@ final class SourceTextUndoGrouping {
         replacementString: String?,
         isPaste: Bool
     ) {
-        guard let undoManager = textView.undoManager,
-              !undoManager.isUndoing,
-              !undoManager.isRedoing,
-              !isComposing,
+        guard !isComposing,
               !textView.hasMarkedText(),
               let replacementString else {
             return
@@ -80,7 +85,7 @@ final class SourceTextUndoGrouping {
             textView.breakUndoCoalescing()
         }
         if let operation = decision.operation {
-            recordNewOperation(operation)
+            recordNewOperation(operation, in: textView)
         }
         pendingBreakAfter = decision.breakAfter
     }
@@ -119,40 +124,28 @@ final class SourceTextUndoGrouping {
 
     func beginNewSession(in textView: NSTextView) {
         resetGroupingState()
-        undoOperations.removeAll()
-        redoOperations.removeAll()
+        undoSnapshots.removeAll()
+        redoSnapshots.removeAll()
         textView.undoManager?.removeAllActions()
     }
 
     func endCurrentGroup(in textView: NSTextView) {
-        textView.breakUndoCoalescing()
         resetGroupingState()
     }
 
     func performUndo(in textView: NSTextView) -> Bool {
         endCurrentGroup(in: textView)
-        guard let undoManager = textView.undoManager,
-              undoManager.canUndo else { return false }
-        let operation = undoOperations.last
-        undoManager.undo()
-        guard let operation else { return true }
-
-        undoOperations.removeLast()
-        redoOperations.append(operation)
-        normalizeSelectionAfterUndo(operation, in: textView)
+        guard let target = undoSnapshots.popLast() else { return false }
+        redoSnapshots.append(snapshot(in: textView, operation: target.operation))
+        restore(target, in: textView)
         return true
     }
 
     func performRedo(in textView: NSTextView) -> Bool {
         endCurrentGroup(in: textView)
-        guard let undoManager = textView.undoManager,
-              undoManager.canRedo else { return false }
-        let operation = redoOperations.last
-        undoManager.redo()
-        guard let operation else { return true }
-
-        redoOperations.removeLast()
-        undoOperations.append(operation)
+        guard let target = redoSnapshots.popLast() else { return false }
+        appendUndoSnapshot(snapshot(in: textView, operation: target.operation))
+        restore(target, in: textView)
         return true
     }
 
@@ -163,7 +156,7 @@ final class SourceTextUndoGrouping {
         expectedInsertionLocation = nil
         pendingBreakAfter = false
         isComposing = true
-        recordNewOperation(.insertion)
+        recordNewOperation(.insertion, in: textView)
     }
 
     private func finishComposition(in textView: NSTextView) {
@@ -181,33 +174,37 @@ final class SourceTextUndoGrouping {
         isComposing = false
     }
 
-    private func recordNewOperation(_ operation: Operation) {
-        undoOperations.append(operation)
-        redoOperations.removeAll()
+    private func recordNewOperation(_ operation: Operation, in textView: NSTextView) {
+        appendUndoSnapshot(snapshot(in: textView, operation: operation))
+        redoSnapshots.removeAll()
     }
 
-    private func normalizeSelectionAfterUndo(
-        _ operation: Operation,
-        in textView: NSTextView
-    ) {
-        let restoredRange = textView.selectedRange()
-        guard restoredRange.length > 0 else { return }
+    private func snapshot(in textView: NSTextView, operation: Operation) -> Snapshot {
+        Snapshot(
+            text: textView.string,
+            selection: textView.selectedRange(),
+            operation: operation
+        )
+    }
 
-        let caretLocation: Int
-        switch operation {
-        case .backwardDeletion:
-            caretLocation = NSMaxRange(restoredRange)
-        case .forwardDeletion:
-            caretLocation = restoredRange.location
-        case .insertion, .selectionDeletion:
-            return
+    private func appendUndoSnapshot(_ snapshot: Snapshot) {
+        undoSnapshots.append(snapshot)
+        if undoSnapshots.count > Self.maximumHistoryCount {
+            undoSnapshots.removeFirst(undoSnapshots.count - Self.maximumHistoryCount)
         }
+    }
 
-        let documentLength = textView.string.utf16.count
-        guard caretLocation <= documentLength else { return }
-        let caretRange = NSRange(location: caretLocation, length: 0)
-        textView.setSelectedRange(caretRange)
-        textView.scrollRangeToVisible(caretRange)
+    private func restore(_ snapshot: Snapshot, in textView: NSTextView) {
+        textView.undoManager?.disableUndoRegistration()
+        textView.string = snapshot.text
+        textView.undoManager?.enableUndoRegistration()
+
+        let documentLength = (snapshot.text as NSString).length
+        let location = min(snapshot.selection.location, documentLength)
+        let length = min(snapshot.selection.length, documentLength - location)
+        let selection = NSRange(location: location, length: length)
+        textView.setSelectedRange(selection)
+        textView.scrollRangeToVisible(selection)
     }
 
     private func decision(

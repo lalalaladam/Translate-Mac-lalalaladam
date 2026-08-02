@@ -56,6 +56,7 @@ extension ViewController {
         }
         logTranslationCoordinator("native-text-change-received", source: sourceView.string)
         if sourceView.hasMarkedText() {
+            let isBeginningIMEComposition = imeCompositionEndCheck == nil
             logInputMethodTiming("text-did-change-marked-text")
             logTranslationCoordinator("ime-composition-started", source: sourceView.string)
             logTranslationStateTransition(
@@ -66,7 +67,13 @@ extension ViewController {
             )
             cancelPendingTranslationDebounce(source: sourceView.string)
             translationInputGeneration += 1
-            invalidateActiveTranslationWork(source: sourceView.string)
+            // Cancelling the active translation once is sufficient for the
+            // whole marked-text session. Repeating three WebView JavaScript
+            // calls for every pinyin keystroke makes the editor visibly
+            // stutter while the input method is composing.
+            if isBeginningIMEComposition {
+                invalidateActiveTranslationWork(source: sourceView.string)
+            }
             scheduleIMECompositionEndCheck()
             return
         }
@@ -149,11 +156,15 @@ extension ViewController {
         imeCompositionGeneration += 1
     }
 
-    func handleCommittedNativeTextChange(_ sourceView: NSTextView) {
+    func handleCommittedNativeTextChange(
+        _ sourceView: NSTextView,
+        isHistoryNavigation explicitHistoryNavigation: Bool = false
+    ) {
         let source = sourceView.string
         let typedSourceView = sourceView as? TranslationSourceTextView
         let isPaste = typedSourceView?.consumeImmediatePasteFlag() == true
-        let isHistoryNavigation = typedSourceView?.isPerformingHistoryNavigation == true
+        let isHistoryNavigation = explicitHistoryNavigation ||
+            typedSourceView?.isPerformingHistoryNavigation == true
         logTranslationCoordinator("native-text-committed", source: source)
         if source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             stopSpeaking()
@@ -166,9 +177,17 @@ extension ViewController {
         let previousWithoutTrailingLineBreaks = longTextSource?.trimmingCharacters(in: .newlines)
         if !sourceWithoutTrailingLineBreaks.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            sourceWithoutTrailingLineBreaks == previousWithoutTrailingLineBreaks {
+            let hadPendingTranslation = translationCoordinator.debounceWorkItem != nil
             longTextSource = source
             updateLongTextLabels()
             logTranslationCoordinator("native-text-change-ignored-formatting-only", source: source)
+            // If Return arrived before the preceding debounce fired, that
+            // older work item no longer matches the editor and will be
+            // discarded. Reschedule the same text with its line break so the
+            // final English input cannot remain permanently untranslated.
+            if hadPendingTranslation {
+                queueLongTextTranslation(source, mode: .debouncedNativeInput)
+            }
             return
         }
 

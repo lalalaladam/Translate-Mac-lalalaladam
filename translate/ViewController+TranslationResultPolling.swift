@@ -25,10 +25,9 @@ extension ViewController {
         if webElapsed >= 1.35,
            translationCoordinator.candidateTranslation == nil {
             let chunk = translationCoordinator.chunks[translationCoordinator.chunkIndex].text
-            if !translationCoordinator.webRetryTriggered {
-                translationCoordinator.webRetryTriggered = true
-                retriggerStalledGoogleWebTranslation(chunk, session: session)
-            }
+            // Do not clear and reinsert the Google textarea here. That retry
+            // restarts work already in progress and was the source of the
+            // post-paste slowdown seen in the 20260802.174704 logs.
             if !translationCoordinator.provisionalFallbackStarted {
                 translationCoordinator.provisionalFallbackStarted = true
                 translateLongTextChunkUsingAPI(
@@ -260,6 +259,22 @@ extension ViewController {
 
     func finalizeWithAPIFallbackIfNeeded(_ chunk: String, session: Int) {
         guard isCurrentTranslationWork(session: session) else { return }
+
+        // The candidate has already been checked against the current source.
+        // At the deadline, commit the value already visible instead of
+        // replacing it with a late fallback result.
+        if translationCoordinator.webHasValidCandidate,
+           let candidate = translationCoordinator.candidateTranslation {
+            translationCoordinator.lastWebTranslation = candidate
+            logTranslationTiming("result-declared-stable")
+            appendLongTextTranslation(
+                candidate,
+                session: session,
+                source: "Google Web at deadline"
+            )
+            return
+        }
+
         translationCoordinator.fallbackShouldFinalize = true
         if let provisional = translationCoordinator.provisionalFallbackTranslation {
             logTranslationTiming("api-provisional-promoted-to-final")
