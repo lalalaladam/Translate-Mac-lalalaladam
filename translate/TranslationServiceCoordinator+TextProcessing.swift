@@ -12,6 +12,9 @@ extension TranslationServiceCoordinator {
     }
 
     func splitLongText(_ text: String) -> [TranslationChunk] {
+        if let balancedPair = balancedParallelWebChunks(text) {
+            return balancedPair
+        }
         var chunks: [TranslationChunk] = []
         var start = text.startIndex
 
@@ -89,6 +92,126 @@ extension TranslationServiceCoordinator {
         }
 
         return chunks.filter { !$0.text.isEmpty || !$0.separatorAfter.isEmpty }
+    }
+
+    /// Two warm WebViews are useful only when their work is comparable. The
+    /// generic chunker fills the first chunk toward 4,500 UTF-16 units, which
+    /// produced the observed 4,330 + 265 split and left the second DOM mostly
+    /// idle. Documents that fit exactly two Web chunks instead split near the
+    /// midpoint, while still preferring paragraph and sentence boundaries.
+    private func balancedParallelWebChunks(_ text: String) -> [TranslationChunk]? {
+        let totalUTF16 = text.utf16.count
+        guard totalUTF16 > googleWebChunkUTF16Limit,
+              totalUTF16 <= googleWebChunkUTF16Limit * 2 else {
+            return nil
+        }
+
+        typealias Candidate = (
+            leftEnd: String.Index,
+            rightStart: String.Index,
+            separator: String,
+            score: Int
+        )
+        let midpoint = totalUTF16 / 2
+        let sentenceBreaks = CharacterSet(charactersIn: ".!?。！？")
+        let whitespace = CharacterSet.whitespacesAndNewlines
+        var best: Candidate?
+
+        func consider(
+            leftEnd: String.Index,
+            rightStart: String.Index,
+            leftUTF16: Int,
+            rightStartUTF16: Int,
+            separator: String,
+            penalty: Int
+        ) {
+            guard leftUTF16 > 0,
+                  totalUTF16 - rightStartUTF16 > 0,
+                  leftUTF16 <= googleWebChunkUTF16Limit,
+                  totalUTF16 - rightStartUTF16 <= googleWebChunkUTF16Limit else {
+                return
+            }
+            let boundaryCenter = (leftUTF16 + rightStartUTF16) / 2
+            let candidate = Candidate(
+                leftEnd,
+                rightStart,
+                separator,
+                abs(boundaryCenter - midpoint) + penalty
+            )
+            if best == nil || candidate.score < best!.score {
+                best = candidate
+            }
+        }
+
+        var index = text.startIndex
+        var utf16Offset = 0
+        while index < text.endIndex {
+            let next = text.index(after: index)
+            let character = text[index..<next]
+            let characterUTF16 = character.utf16.count
+            let afterOffset = utf16Offset + characterUTF16
+            let isWhitespace = character.unicodeScalars.allSatisfy(whitespace.contains)
+
+            if isWhitespace {
+                let runStart = index
+                let runStartOffset = utf16Offset
+                var runEnd = next
+                var runEndOffset = afterOffset
+                while runEnd < text.endIndex {
+                    let runNext = text.index(after: runEnd)
+                    let runCharacter = text[runEnd..<runNext]
+                    guard runCharacter.unicodeScalars.allSatisfy(whitespace.contains) else {
+                        break
+                    }
+                    runEndOffset += runCharacter.utf16.count
+                    runEnd = runNext
+                }
+                let separator = String(text[runStart..<runEnd])
+                let containsLineBreak = separator.unicodeScalars.contains {
+                    CharacterSet.newlines.contains($0)
+                }
+                consider(
+                    leftEnd: runStart,
+                    rightStart: runEnd,
+                    leftUTF16: runStartOffset,
+                    rightStartUTF16: runEndOffset,
+                    separator: separator,
+                    penalty: containsLineBreak ? 0 : totalUTF16 / 16
+                )
+                index = runEnd
+                utf16Offset = runEndOffset
+                continue
+            }
+
+            // A sentence boundary may move slightly away from the exact
+            // midpoint to keep complete thoughts together. A hard character
+            // boundary remains the last resort for text without separators.
+            let isSentenceBreak = character.unicodeScalars.allSatisfy {
+                sentenceBreaks.contains($0)
+            }
+            consider(
+                leftEnd: next,
+                rightStart: next,
+                leftUTF16: afterOffset,
+                rightStartUTF16: afterOffset,
+                separator: "",
+                penalty: isSentenceBreak ? totalUTF16 / 50 : totalUTF16 / 8
+            )
+            index = next
+            utf16Offset = afterOffset
+        }
+
+        guard let best else { return nil }
+        return [
+            TranslationChunk(
+                text: String(text[..<best.leftEnd]),
+                separatorAfter: best.separator
+            ),
+            TranslationChunk(
+                text: String(text[best.rightStart...]),
+                separatorAfter: ""
+            )
+        ]
     }
 
     func effectiveSourceLanguage(

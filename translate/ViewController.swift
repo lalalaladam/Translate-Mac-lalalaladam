@@ -171,6 +171,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var isUpdatingNativeWorkspace = false
     var longTextSource: String?
     var longTextTranslation = ""
+    var parallelWebTranslationCache = ParallelWebTranslationCache()
     let translationCoordinator = TranslationServiceCoordinator()
     var longTextStatusState: LongTextStatusState = .idle
     var longTextSourceLanguage = TranslateLanguagePreferences.source.rawValue
