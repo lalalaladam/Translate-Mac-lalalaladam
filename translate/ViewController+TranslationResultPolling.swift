@@ -25,6 +25,11 @@ extension ViewController {
         if webElapsed >= 1.35,
            translationCoordinator.candidateTranslation == nil {
             let chunk = translationCoordinator.chunks[translationCoordinator.chunkIndex].text
+            if !translationCoordinator.webRetryTriggered,
+               retryStalledTranslationOnParallelWebView(chunk, session: session) {
+                translationCoordinator.webRetryTriggered = true
+                return
+            }
             // Do not clear and reinsert the Google textarea here. That retry
             // restarts work already in progress and was the source of the
             // post-paste slowdown seen in the 20260802.174704 logs.
@@ -252,7 +257,8 @@ extension ViewController {
             self.appendLongTextTranslation(
                 translation,
                 session: session,
-                source: "Google Web"
+                source: "Google Web",
+                provider: .web
             )
         }
     }
@@ -270,7 +276,8 @@ extension ViewController {
             appendLongTextTranslation(
                 candidate,
                 session: session,
-                source: "Google Web at deadline"
+                source: "Google Web at deadline",
+                provider: .web
             )
             return
         }
@@ -281,7 +288,8 @@ extension ViewController {
             appendLongTextTranslation(
                 provisional,
                 session: session,
-                source: "provisional API fallback at Web deadline"
+                source: "provisional API fallback at Web deadline",
+                provider: .api
             )
             return
         }

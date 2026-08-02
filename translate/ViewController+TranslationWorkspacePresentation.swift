@@ -258,6 +258,8 @@ extension ViewController {
         translationCoordinator.session += 1
         longTextSource = nil
         longTextTranslation = ""
+        translationResultProviders.removeAll()
+        completedTranslationResultProviders.removeAll()
         translationCoordinator.chunks = []
         translationCoordinator.chunkIndex = 0
         let encoded = Data(source.utf8).base64EncodedString()
@@ -286,6 +288,8 @@ extension ViewController {
         longTextOverlay?.isHidden = true
         longTextSource = nil
         longTextTranslation = ""
+        translationResultProviders.removeAll()
+        completedTranslationResultProviders.removeAll()
         translationCoordinator.clearCompletedSnapshot()
         translationCoordinator.clearTranslationBuffers()
         setLongTextStatus(.idle)
@@ -356,14 +360,33 @@ extension ViewController {
                 "Translating part \(translationCoordinator.chunkIndex + 1) of \(translationCoordinator.chunks.count)…"
             )
         case .completed:
-            return translationCoordinator.chunks.count > 1
+            let completion = translationCoordinator.chunks.count > 1
                 ? interfaceText("长文本翻译完成", "Long-text translation complete")
                 : interfaceText("翻译完成", "Translation complete")
+            guard let provider = translationProviderStatusText() else {
+                return completion
+            }
+            return "\(completion) · \(provider)"
         case .failed:
             return interfaceText(
                 "部分内容未能完成翻译；请重试。",
                 "Some content could not be translated. Please try again."
             )
+        }
+    }
+
+    func translationProviderStatusText() -> String? {
+        let usedWeb = translationResultProviders.contains(.web)
+        let usedAPI = translationResultProviders.contains(.api)
+        switch (usedWeb, usedAPI) {
+        case (true, true):
+            return interfaceText("Web + API 翻译", "Web + API translation")
+        case (true, false):
+            return interfaceText("Web 翻译", "Web translation")
+        case (false, true):
+            return interfaceText("API 翻译", "API translation")
+        case (false, false):
+            return nil
         }
     }
 

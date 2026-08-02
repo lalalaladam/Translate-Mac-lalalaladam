@@ -7,6 +7,34 @@ import Cocoa
 import WebKit
 
 extension ViewController {
+    @discardableResult
+    func retryStalledTranslationOnParallelWebView(
+        _ chunk: String,
+        session: Int
+    ) -> Bool {
+        guard session == translationCoordinator.session,
+              translationCoordinator.chunks.count == 1,
+              parallelTranslationWebViewReady,
+              activeTranslationWebView !== parallelTranslationWebView,
+              translationPageMatches(
+                  source: TranslateLanguage(rawValue: longTextSourceLanguage) ?? .automatic,
+                  target: TranslateLanguage(rawValue: longTextTargetLanguage) ?? .simplifiedChinese,
+                  in: parallelTranslationWebView
+              ) else {
+            return false
+        }
+
+        activeTranslationWebView?.evaluateJavaScript(
+            "window.__macTranslateResultObserver?.disconnect();",
+            completionHandler: nil
+        )
+        translationCoordinator.activeWebViewGeneration += 1
+        activeTranslationWebView = parallelTranslationWebView
+        logTranslationTiming("web-stall-parallel-webview-retry")
+        translateLongTextChunkUsingGoogleWeb(chunk, session: session)
+        return true
+    }
+
     func translateLongTextChunkUsingGoogleWeb(
         _ chunk: String,
         session: Int

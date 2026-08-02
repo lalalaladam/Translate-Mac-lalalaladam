@@ -56,6 +56,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         case failed
     }
 
+    enum TranslationResultProvider: Hashable {
+        case web
+        case api
+    }
+
     enum SpeechPane {
         case source
         case translation
@@ -79,6 +84,8 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var automaticTranslationTarget = TranslateLanguagePreferences.target
     var standbyTranslationWebViewReady = false
     var standbyTranslationWebViewLoading = false
+    var standbyTranslationSource = TranslateLanguagePreferences.target
+    var standbyTranslationTarget = TranslateLanguagePreferences.source
     var parallelTranslationWebViewReady = false
     var parallelTranslationWebViewLoading = false
     var parallelTranslationSource = TranslateLanguagePreferences.source
@@ -171,6 +178,8 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var isUpdatingNativeWorkspace = false
     var longTextSource: String?
     var longTextTranslation = ""
+    var translationResultProviders: Set<TranslationResultProvider> = []
+    var completedTranslationResultProviders: Set<TranslationResultProvider> = []
     var parallelWebTranslationCache = ParallelWebTranslationCache()
     let translationCoordinator = TranslationServiceCoordinator()
     var longTextStatusState: LongTextStatusState = .idle

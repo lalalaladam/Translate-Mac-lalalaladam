@@ -59,6 +59,7 @@ extension ViewController {
                 translationCoordinator.completedTranslation = completedTranslation
                 translationCoordinator.completedSourceLanguage = longTextSourceLanguage
                 translationCoordinator.completedTargetLanguage = longTextTargetLanguage
+                completedTranslationResultProviders = translationResultProviders
                 translationPipelineLogger.info(
                     "Completed translation snapshot: sourceChars=\(source.count, privacy: .public), translationChars=\(completedTranslation.count, privacy: .public), chunks=\(self.translationCoordinator.chunks.count, privacy: .public)"
                 )
@@ -74,6 +75,10 @@ extension ViewController {
             translationCoordinator.formattingOnlyRefresh = false
             updateInlineLongText(source: nil, translation: longTextTranslation, status: status)
             updateLongTextLabels()
+            warmParallelTranslationService(
+                source: TranslateLanguage(rawValue: longTextSourceLanguage) ?? .automatic,
+                target: TranslateLanguage(rawValue: longTextTargetLanguage) ?? .simplifiedChinese
+            )
             return
         }
 
@@ -132,6 +137,9 @@ extension ViewController {
             },
             onOrderedResults: { [weak self] results, completed in
                 guard let self else { return }
+                if !results.isEmpty {
+                    self.translationResultProviders.insert(.api)
+                }
                 for result in results {
                     if result.replacesVisibleTranslation {
                         self.longTextTranslation =
@@ -537,6 +545,7 @@ extension ViewController {
             longTextTranslation.append(assembledTranslation)
         }
         longTextTranslationView?.string = longTextTranslation
+        translationResultProviders.insert(.web)
         translationCoordinator.chunkIndex = translationCoordinator.chunks.count
         logTranslationTiming("parallel-web-batch-completed")
         translateNextLongTextChunk(session: session)

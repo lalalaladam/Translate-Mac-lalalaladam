@@ -59,10 +59,30 @@ extension ViewController {
             return
         }
         if webView === standbyTranslationWebView {
+            guard translationPageMatches(
+                source: standbyTranslationSource,
+                target: standbyTranslationTarget,
+                in: standbyTranslationWebView
+            ) else {
+                return
+            }
             standbyTranslationWebViewLoading = false
             standbyTranslationWebViewReady = true
             installTranslationTimingRuntime(in: webView)
             logStartupTiming("Standby translation service ready")
+            if let pendingSource = pendingPrimaryTranslationSource,
+               pendingPrimaryTranslationSession == translationCoordinator.session {
+                let effectiveSource = translationCoordinator.effectiveSourceLanguage(
+                    for: pendingSource,
+                    selectedLanguage: currentSourceLanguage
+                )
+                if promoteStandbyTranslationServiceIfReady(
+                    source: effectiveSource,
+                    target: currentTargetLanguage
+                ) {
+                    submitPendingPrimaryTranslationIfCurrent()
+                }
+            }
             return
         }
         updateCurrentLanguages(from: webView.url)

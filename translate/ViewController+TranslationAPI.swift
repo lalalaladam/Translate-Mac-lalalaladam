@@ -101,7 +101,8 @@ extension ViewController {
                     self.appendLongTextTranslation(
                         translation,
                         session: session,
-                        source: "direct API fallback"
+                        source: "direct API fallback",
+                        provider: .api
                     )
                 }
             }
@@ -131,7 +132,8 @@ extension ViewController {
     func appendLongTextTranslation(
         _ translation: String,
         session: Int,
-        source: String
+        source: String,
+        provider: TranslationResultProvider
     ) -> Bool {
         guard session == translationCoordinator.session else { return false }
         guard let currentSource = longTextSource else {
@@ -168,6 +170,7 @@ extension ViewController {
             longTextTranslation.append(separator)
         }
         translationCoordinator.webDeadline = nil
+        translationResultProviders.insert(provider)
         longTextTranslationView?.string = longTextTranslation
         if translationTimingRequest?.didLogFinalDisplay == false {
             translationTimingRequest?.didLogFinalDisplay = true
@@ -248,6 +251,7 @@ extension ViewController {
         if translationCoordinator.formattingOnlyRefresh && !translationCoordinator.completedTranslation.isEmpty {
             translationCoordinator.formattingOnlyRefresh = false
             longTextTranslation = translationCoordinator.completedTranslation
+            translationResultProviders = completedTranslationResultProviders
             let status = setLongTextStatus(.completed)
             updateInlineLongText(source: nil, translation: longTextTranslation, status: status)
             updateLongTextLabels()
