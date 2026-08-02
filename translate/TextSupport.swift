@@ -26,7 +26,7 @@ class AlignmentTextView: NSTextView {
 
 final class TranslationSourceTextView: AlignmentTextView {
     private var hasPendingImmediatePaste = false
-    private var beginsNewSessionAfterPaste = false
+    private var beginsNewSessionAfterEdit = false
     private let sourceUndoGrouping = SourceTextUndoGrouping()
     private(set) var isPerformingHistoryNavigation = false
     var onPasteReceived: ((String?) -> Void)?
@@ -41,6 +41,16 @@ final class TranslationSourceTextView: AlignmentTextView {
         affectedRange: NSRange,
         replacementString: String?
     ) {
+        if !string.isEmpty,
+           replacementString?.isEmpty == true,
+           affectedRange.location == 0,
+           affectedRange.length == (string as NSString).length {
+            // Command-A followed by Delete establishes an empty document as
+            // the new baseline, just like replacing the whole document by
+            // paste. The preceding translation must not be resurrected by
+            // undo after the user has explicitly started over.
+            beginsNewSessionAfterEdit = true
+        }
         sourceUndoGrouping.prepareChange(
             in: self,
             affectedRange: affectedRange,
@@ -51,8 +61,8 @@ final class TranslationSourceTextView: AlignmentTextView {
 
     func completeUndoGroupingAfterTextChange() -> Bool {
         sourceUndoGrouping.textDidChange(in: self)
-        guard beginsNewSessionAfterPaste else { return false }
-        beginsNewSessionAfterPaste = false
+        guard beginsNewSessionAfterEdit else { return false }
+        beginsNewSessionAfterEdit = false
         sourceUndoGrouping.beginNewSession(in: self)
         return true
     }
@@ -102,7 +112,7 @@ final class TranslationSourceTextView: AlignmentTextView {
         // Replacing the complete source is a new document. Once the paste is
         // committed, discard the preceding document's undo history and keep
         // the pasted text as the new baseline.
-        beginsNewSessionAfterPaste = !string.isEmpty &&
+        beginsNewSessionAfterEdit = !string.isEmpty &&
             selection.location == 0 &&
             selection.length == (string as NSString).length
         let pasteboardText = NSPasteboard.general.string(forType: .string)
@@ -116,14 +126,14 @@ final class TranslationSourceTextView: AlignmentTextView {
             insertText(text, replacementRange: selectedRange())
             if string == sourceBeforePaste {
                 hasPendingImmediatePaste = false
-                beginsNewSessionAfterPaste = false
+                beginsNewSessionAfterEdit = false
             }
             return
         }
         super.paste(sender)
         if string == sourceBeforePaste {
             hasPendingImmediatePaste = false
-            beginsNewSessionAfterPaste = false
+            beginsNewSessionAfterEdit = false
         }
     }
 }

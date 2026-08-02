@@ -415,6 +415,7 @@ extension ViewController {
 
     func clearLongTextTranslationForEmptyInput() {
         logTranslationCoordinator("empty-input-clearing", source: "")
+        clearParallelWebTranslationCache()
         cancelPendingTranslationDebounce(source: "")
         translationInputGeneration += 1
         invalidateActiveTranslationWork(source: "")

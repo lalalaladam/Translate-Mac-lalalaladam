@@ -12,6 +12,7 @@ extension ViewController {
     /// translation's source text.
     func beginNewSourceUndoSession() {
         (longTextSourceView as? TranslationSourceTextView)?.beginNewUndoSession()
+        clearParallelWebTranslationCache()
     }
 
     func textView(
@@ -47,6 +48,7 @@ extension ViewController {
         let beganNewUndoSession = typedSourceView?
             .completeUndoGroupingAfterTextChange() == true
         if beganNewUndoSession {
+            clearParallelWebTranslationCache()
             logTranslationCoordinator(
                 "native-full-replacement-started-new-undo-session",
                 source: sourceView.string

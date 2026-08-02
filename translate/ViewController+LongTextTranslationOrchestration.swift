@@ -14,6 +14,7 @@ struct ParallelWebTranslationChunk {
     var candidateTranslation: String?
     var candidateUpdatedAt: Date?
     var completedTranslation: String?
+    var didLogBlockedBaseline = false
 }
 
 struct ParallelWebTranslationBatch {
@@ -22,6 +23,13 @@ struct ParallelWebTranslationBatch {
     var chunks: [Int: ParallelWebTranslationChunk]
     var inFlightChunkIndexes: Set<Int> = []
     var scheduledPoll: DispatchWorkItem?
+}
+
+struct ParallelWebTranslationCache {
+    var documentSource = ""
+    var sourceLanguage = ""
+    var targetLanguage = ""
+    var translationsBySource: [String: String] = [:]
 }
 
 extension ViewController {
@@ -166,13 +174,20 @@ extension ViewController {
             return false
         }
 
+        let canReusePreviousChunks =
+            parallelWebTranslationCache.documentSource == translationCoordinator.completedSource &&
+            parallelWebTranslationCache.sourceLanguage == longTextSourceLanguage &&
+            parallelWebTranslationCache.targetLanguage == longTextTargetLanguage
         let chunks = translationCoordinator.chunks.enumerated().reduce(
             into: [Int: ParallelWebTranslationChunk]()
         ) { result, item in
             result[item.offset] = ParallelWebTranslationChunk(
                 index: item.offset,
                 source: item.element.text,
-                separatorAfter: item.element.separatorAfter
+                separatorAfter: item.element.separatorAfter,
+                completedTranslation: canReusePreviousChunks
+                    ? parallelWebTranslationCache.translationsBySource[item.element.text]
+                    : nil
             )
         }
         parallelWebTranslationBatch = ParallelWebTranslationBatch(
@@ -183,17 +198,29 @@ extension ViewController {
         let status = setLongTextStatus(.translating)
         updateInlineLongText(source: nil, translation: longTextTranslation, status: status)
         logTranslationTiming("parallel-web-batch-started")
-        submitParallelWebChunk(
-            chunks[0]!,
-            in: primaryWebView,
-            session: session
-        )
-        submitParallelWebChunk(
-            chunks[1]!,
-            in: parallelTranslationWebView,
-            session: session
-        )
-        scheduleParallelWebPoll(session: session, delay: longTextPollInterval)
+        for index in 0..<translationCoordinator.chunks.count {
+            guard let chunk = chunks[index] else { continue }
+            if chunk.completedTranslation != nil {
+                logTranslationTiming(
+                    "parallel-web-chunk-reused",
+                    details: "chunk=\(index)",
+                    diagnosticFields: [
+                        "chunk_index": index,
+                        "chunk_source_utf16": chunk.source.utf16.count
+                    ]
+                )
+                continue
+            }
+            submitParallelWebChunk(
+                chunk,
+                in: index == 0 ? primaryWebView : parallelTranslationWebView,
+                session: session
+            )
+        }
+        finishParallelWebTranslationIfComplete(session: session)
+        if parallelWebTranslationBatch?.session == session {
+            scheduleParallelWebPoll(session: session, delay: longTextPollInterval)
+        }
         return true
     }
 
@@ -211,6 +238,92 @@ extension ViewController {
                     Uint8Array.from(atob("\#(encoded)"), (character) =>
                         character.charCodeAt(0))
                 );
+                // Swift validates sources after trimming their outer
+                // whitespace. Use the same equivalence here so adding a
+                // trailing space can reuse an already correct translation
+                // instead of waiting for an identical-result API fallback.
+                const inputAlreadyCurrent = textarea.value.trim() === value.trim();
+                window.__macTranslateReadParallelResult = () => {
+                    const source = document.querySelector("textarea")?.value || "";
+                    const extractable = (element) => {
+                        const style = getComputedStyle(element);
+                        const rect = element.getBoundingClientRect();
+                        return style.display !== "none" &&
+                            rect.width > 0 && rect.height > 0;
+                    };
+                    const resultRoot = document.querySelector(".QcsUad.sMVRZe") ||
+                        document.querySelector(".QcsUad:not(.FkMbO)") ||
+                        document.querySelector(".QcsUad");
+                    const resultGroups = [
+                        "[jsname=\"W297wb\"]", ".ryNqvb", ".jCAhz", ".lRu31", ".HwtZe"
+                    ];
+                    var nodes = [];
+                    for (const selector of resultGroups) {
+                        nodes = resultRoot
+                            ? Array.from(resultRoot.querySelectorAll(selector))
+                                .filter(extractable)
+                            : [];
+                        if (nodes.length) break;
+                    }
+                    const candidates = nodes.filter((element) =>
+                        extractable(element) &&
+                        !element.closest(".UdTY9, .zWhQbb, .mDTU0c")
+                    );
+                    const textGroups = [];
+                    const groupIndexByHost = new Map();
+                    for (const element of candidates) {
+                        const text = (element.innerText || element.textContent || "").trim();
+                        if (!text) continue;
+                        const duplicatesDescendant = candidates.some((other) =>
+                            other !== element && element.contains(other) &&
+                            (other.innerText || other.textContent || "").trim() === text
+                        );
+                        if (duplicatesDescendant) continue;
+                        const host = element.closest(".HwtZe") || element.parentElement;
+                        let groupIndex = groupIndexByHost.get(host);
+                        if (groupIndex === undefined) {
+                            groupIndex = textGroups.length;
+                            groupIndexByHost.set(host, groupIndex);
+                            textGroups.push([]);
+                        }
+                        if (!textGroups[groupIndex].includes(text)) {
+                            textGroups[groupIndex].push(text);
+                        }
+                    }
+                    const texts = textGroups.map((group, index) => {
+                        const host = Array.from(groupIndexByHost.keys())
+                            .find((candidate) => groupIndexByHost.get(candidate) === index);
+                        const hostText = host?.matches?.(".HwtZe")
+                            ? (host.innerText || "").trim()
+                            : "";
+                        return hostText || group.join(" ").trim();
+                    }).filter((text, index, values) =>
+                        Boolean(text) && values.indexOf(text) === index
+                    );
+                    // Result blocks represent Google's translated paragraphs.
+                    // Joining them with spaces erased an inserted Return and
+                    // made the stale-result guard behave inconsistently.
+                    const translation = texts.join("\n");
+                    if (window.__macTranslateParallelWaitForDifferentResult &&
+                        translation === window.__macTranslateParallelBlockedTranslation) {
+                        return [source, "", true];
+                    }
+                    if (translation) {
+                        window.__macTranslateParallelWaitForDifferentResult = false;
+                    }
+                    return [source, translation, false];
+                };
+                if (!inputAlreadyCurrent) {
+                    window.__macTranslateParallelWaitForDifferentResult = false;
+                    const previousPayload = window.__macTranslateReadParallelResult();
+                    window.__macTranslateParallelBlockedTranslation =
+                        previousPayload?.[1] || "";
+                    window.__macTranslateParallelWaitForDifferentResult = Boolean(
+                        window.__macTranslateParallelBlockedTranslation
+                    );
+                } else {
+                    window.__macTranslateParallelWaitForDifferentResult = false;
+                }
                 const setter = Object.getOwnPropertyDescriptor(
                     HTMLTextAreaElement.prototype,
                     "value"
@@ -276,24 +389,15 @@ extension ViewController {
     ) {
         serviceWebView.evaluateJavaScript(#"""
             (() => {
-                const source = document.querySelector("textarea")?.value || "";
-                const resultRoot = document.querySelector(".QcsUad.sMVRZe") ||
-                    document.querySelector(".QcsUad:not(.FkMbO)") ||
-                    document.querySelector(".QcsUad");
-                const resultGroups = [
-                    "[jsname=\"W297wb\"]", ".ryNqvb", ".jCAhz", ".lRu31", ".HwtZe"
-                ];
-                var nodes = [];
-                for (const selector of resultGroups) {
-                    nodes = resultRoot
-                        ? Array.from(resultRoot.querySelectorAll(selector))
-                        : [];
-                    if (nodes.length) break;
+                if (typeof window.__macTranslateReadParallelResult === "function") {
+                    return window.__macTranslateReadParallelResult();
                 }
-                const texts = nodes.map((element) =>
-                    (element.textContent || "").trim()
-                ).filter((text, index, values) => Boolean(text) && values.indexOf(text) === index);
-                return [source, texts.join(" ")];
+                // A configured result reader is installed by submission with
+                // the exact parser used for the old-result baseline. Do not
+                // fall back to a second, whitespace-flattening parser while
+                // that setup is temporarily unavailable.
+                const source = document.querySelector("textarea")?.value || "";
+                return [source, "", false];
             })();
         """#) { [weak self] result, _ in
             self?.handleParallelWebResult(
@@ -321,6 +425,7 @@ extension ViewController {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let extractedTranslation = (payload?.dropFirst().first as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let blockedByPreviousResult = payload?.dropFirst(2).first as? Bool ?? false
         let expectedSource = chunk.source.trimmingCharacters(in: .whitespacesAndNewlines)
         let translation = TranslationServiceTextNormalizer.normalize(
             extractedTranslation,
@@ -333,6 +438,18 @@ extension ViewController {
             ) != nil
 
         guard observedSource == expectedSource, !isLoading else {
+            if blockedByPreviousResult, !chunk.didLogBlockedBaseline {
+                chunk.didLogBlockedBaseline = true
+                batch.chunks[chunkIndex] = chunk
+                logTranslationTiming(
+                    "parallel-web-stale-result-blocked",
+                    details: "chunk=\(chunkIndex)",
+                    diagnosticFields: [
+                        "chunk_index": chunkIndex,
+                        "chunk_source_utf16": chunk.source.utf16.count
+                    ]
+                )
+            }
             parallelWebTranslationBatch = batch
             scheduleParallelWebPoll(session: session)
             return
@@ -347,7 +464,15 @@ extension ViewController {
                         default: longTextResultSettlingInterval
                     ) {
             chunk.completedTranslation = translation
-            logTranslationTiming("parallel-web-chunk-stable")
+            logTranslationTiming(
+                "parallel-web-chunk-stable",
+                details: "chunk=\(chunkIndex) source_utf16=\(chunk.source.utf16.count) translation_chars=\(translation.count)",
+                diagnosticFields: [
+                    "chunk_index": chunkIndex,
+                    "chunk_source_utf16": chunk.source.utf16.count,
+                    "chunk_translation_chars": translation.count
+                ]
+            )
         }
         batch.chunks[chunkIndex] = chunk
         parallelWebTranslationBatch = batch
@@ -385,7 +510,6 @@ extension ViewController {
             return
         }
         batch.scheduledPoll?.cancel()
-        parallelWebTranslationBatch = nil
         let assembledTranslation = (0..<translationCoordinator.chunks.count).compactMap {
             batch.chunks[$0].flatMap { chunk in
                 chunk.completedTranslation.map { $0 + chunk.separatorAfter }
@@ -395,6 +519,17 @@ extension ViewController {
             fallBackFromParallelWebTranslation(session: session)
             return
         }
+        parallelWebTranslationCache = ParallelWebTranslationCache(
+            documentSource: longTextSource ?? "",
+            sourceLanguage: longTextSourceLanguage,
+            targetLanguage: longTextTargetLanguage,
+            translationsBySource: batch.chunks.values.reduce(into: [:]) { result, chunk in
+                if let translation = chunk.completedTranslation {
+                    result[chunk.source] = translation
+                }
+            }
+        )
+        parallelWebTranslationBatch = nil
         if translationCoordinator.replacesVisibleTranslation {
             longTextTranslation = assembledTranslation
             translationCoordinator.replacesVisibleTranslation = false
@@ -431,5 +566,9 @@ extension ViewController {
     func cancelParallelWebTranslationBatch() {
         parallelWebTranslationBatch?.scheduledPoll?.cancel()
         parallelWebTranslationBatch = nil
+    }
+
+    func clearParallelWebTranslationCache() {
+        parallelWebTranslationCache = ParallelWebTranslationCache()
     }
 }

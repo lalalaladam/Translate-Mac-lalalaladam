@@ -49,16 +49,28 @@ extension ViewController {
         translationTimingRequest?.session = session
     }
 
-    func logTranslationTiming(_ milestone: String, details: String = "") {
+    func logTranslationTiming(
+        _ milestone: String,
+        details: String = "",
+        diagnosticFields: [String: Any] = [:]
+    ) {
         guard let request = translationTimingRequest else { return }
         let elapsed = (CACurrentMediaTime() - request.startedAt) * 1_000
         translationPipelineLogger.info(
             "[TranslationTiming][\(request.label, privacy: .public)][request=\(request.id, privacy: .public)][session=\(request.session, privacy: .public)] milestone=\(milestone, privacy: .public) elapsed_ms=\(elapsed, format: .fixed(precision: 3)) \(details, privacy: .public)"
         )
-        TranslationPerformanceDiagnostics.shared.record(
-            requestID: request.id,
-            stage: milestone
-        )
+        if diagnosticFields.isEmpty {
+            TranslationPerformanceDiagnostics.shared.record(
+                requestID: request.id,
+                stage: milestone
+            )
+        } else {
+            TranslationPerformanceDiagnostics.shared.recordDetailed(
+                requestID: request.id,
+                stage: milestone,
+                extra: diagnosticFields
+            )
+        }
     }
 
     func logTranslationStateTransition(
