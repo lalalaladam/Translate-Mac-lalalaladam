@@ -113,9 +113,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         var didLogFirstVerifiedDisplay = false
         var didLogStableResult = false
         var didLogFinalDisplay = false
+        var webKitDispatchRoundTripMilliseconds: Double?
     }
     var translationTimingRequestCount = 0
     var translationTimingRequest: TranslationTimingRequest?
+    var translationWebViewLastActivityAt: [ObjectIdentifier: Date] = [:]
     var visualEffect: NSVisualEffectView!
     var workspaceBackgroundView: NSVisualEffectView?
     var keepOnTopButton: NSButton!

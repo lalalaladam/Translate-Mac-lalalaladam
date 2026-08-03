@@ -239,6 +239,7 @@ extension ViewController {
 
         let hadPendingPrimaryRequest = pendingPrimaryTranslationSource != nil
         markReady()
+        markTranslationWebServiceReady(webView)
         translationCoordinator.markWebServiceActive()
         logStartupTiming("Primary translation service ready")
         logTranslationTiming("primary-translation-service-ready")
@@ -310,7 +311,9 @@ extension ViewController {
                         requestID: timing.requestID,
                         session: timing.session,
                         milestone: "first-result-dom-mutation",
-                        jsElapsedMS: timing.firstResultMutationAt - timing.jsStartedAt
+                        jsElapsedMS: timing.firstResultMutationAt - timing.jsStartedAt,
+                        pageVisibility: document.visibilityState,
+                        pageFocused: document.hasFocus()
                     });
                 });
                 window.__macTranslateTimingObserver.observe(document.documentElement, {

@@ -18,6 +18,7 @@ extension ViewController {
             }
             parallelTranslationWebViewLoading = false
             parallelTranslationWebViewReady = true
+            markTranslationWebServiceReady(webView)
             installTranslationTimingRuntime(in: webView)
             logStartupTiming("Parallel translation service ready")
             return
@@ -42,6 +43,7 @@ extension ViewController {
             }
             automaticTranslationWebViewLoading = false
             automaticTranslationWebViewReady = true
+            markTranslationWebServiceReady(webView)
             translationCoordinator.markWebServiceActive()
             if let source = pendingAutomaticTranslationSource,
                pendingAutomaticTranslationSession == translationCoordinator.session,
@@ -69,6 +71,7 @@ extension ViewController {
             }
             standbyTranslationWebViewLoading = false
             standbyTranslationWebViewReady = true
+            markTranslationWebServiceReady(webView)
             translationCoordinator.markWebServiceActive()
             installTranslationTimingRuntime(in: webView)
             logStartupTiming("Standby translation service ready")

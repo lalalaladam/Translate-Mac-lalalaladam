@@ -24,7 +24,11 @@ extension ViewController: WKScriptMessageHandler {
                     .sorted { $0.key < $1.key }
                     .map { "\($0.key)=\($0.value)" }
                     .joined(separator: " ")
-                logTranslationTiming("js-\(milestone)", details: details)
+                logTranslationTiming(
+                    "js-\(milestone)",
+                    details: details,
+                    diagnosticFields: webTimingDiagnosticFields(from: payload)
+                )
                 return
             }
 
@@ -106,9 +110,31 @@ extension ViewController: WKScriptMessageHandler {
                     translationTimingRequest?.didLogFirstValidJSResult = true
                     let jsElapsed = (payload["jsElapsedMS"] as? NSNumber)?.doubleValue ?? -1
                     let firstMutation = (payload["firstMutationMS"] as? NSNumber)?.doubleValue ?? -1
+                    var fields = webTimingDiagnosticFields(from: payload)
+                    if let dispatchRoundTrip =
+                        translationTimingRequest?.webKitDispatchRoundTripMilliseconds {
+                        fields["webkit_dispatch_roundtrip_ms"] = dispatchRoundTrip
+                    }
+                    if let lastNetworkEnd =
+                        (payload["webNetworkLastEndMS"] as? NSNumber)?.doubleValue,
+                       lastNetworkEnd >= 0 {
+                        fields["dom_after_network_ms"] = max(
+                            0,
+                            jsElapsed - lastNetworkEnd
+                        )
+                    }
+                    fields["delay_classification"] = classifyWebDelay(
+                        fields: fields,
+                        jsElapsedMilliseconds: jsElapsed
+                    )
                     logTranslationTiming(
                         "js-first-valid-result",
-                        details: String(format: "js_elapsed_ms=%.3f first_mutation_ms=%.3f", jsElapsed, firstMutation)
+                        details: String(
+                            format: "js_elapsed_ms=%.3f first_mutation_ms=%.3f",
+                            jsElapsed,
+                            firstMutation
+                        ),
+                        diagnosticFields: fields
                     )
                 }
 
@@ -185,5 +211,59 @@ extension ViewController: WKScriptMessageHandler {
             let appDelegate = NSApplication.shared.delegate as! AppDelegate
             appDelegate.panel.resignKey()
         }
+    }
+
+    private func webTimingDiagnosticFields(
+        from payload: [String: Any]
+    ) -> [String: Any] {
+        let keys: [String: String] = [
+            "jsElapsedMS": "javascript_elapsed_ms",
+            "firstMutationMS": "first_dom_mutation_ms",
+            "observerReadyMS": "observer_ready_ms",
+            "textareaWrittenMS": "textarea_written_ms",
+            "inputDispatchedMS": "input_dispatched_ms",
+            "pageVisibility": "page_visibility",
+            "pageFocused": "page_focused",
+            "webNetworkRequestCount": "web_network_request_count",
+            "webNetworkDetailedCount": "web_network_detailed_count",
+            "webNetworkFirstStartMS": "web_network_first_start_ms",
+            "webNetworkFirstResponseMS": "web_network_first_response_ms",
+            "webNetworkLastEndMS": "web_network_last_end_ms",
+            "webNetworkLongestMS": "web_network_longest_ms",
+            "webNetworkMaxTTFBMS": "web_network_max_ttfb_ms",
+            "webNetworkTransferBytes": "web_network_transfer_bytes"
+        ]
+        return keys.reduce(into: [String: Any]()) { result, item in
+            if let value = payload[item.key] {
+                result[item.value] = value
+            }
+        }
+    }
+
+    private func classifyWebDelay(
+        fields: [String: Any],
+        jsElapsedMilliseconds: Double
+    ) -> String {
+        let number = { (key: String) -> Double in
+            (fields[key] as? NSNumber)?.doubleValue ?? -1
+        }
+        if number("webkit_dispatch_roundtrip_ms") >= 250 {
+            return "webkit-dispatch-suspected"
+        }
+
+        let requestCount = number("web_network_request_count")
+        if requestCount == 0 {
+            return jsElapsedMilliseconds >= 750
+                ? "web-network-unobserved"
+                : "normal-or-cached"
+        }
+        if number("web_network_max_ttfb_ms") >= 750 ||
+            number("web_network_longest_ms") >= 1_000 {
+            return "network-or-server-suspected"
+        }
+        if number("dom_after_network_ms") >= 350 {
+            return "page-processing-or-dom-suspected"
+        }
+        return "mixed-or-normal"
     }
 }
