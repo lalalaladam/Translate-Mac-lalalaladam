@@ -7,6 +7,112 @@ import Cocoa
 import QuartzCore
 import WebKit
 
+private final class TranslationAPINetworkSession:
+    NSObject,
+    URLSessionTaskDelegate,
+    @unchecked Sendable
+{
+    static let shared = TranslationAPINetworkSession()
+
+    private let lock = NSLock()
+    private var metricsHandlers: [Int: ([String: Any]) -> Void] = [:]
+    private lazy var session = URLSession(
+        configuration: .default,
+        delegate: self,
+        delegateQueue: nil
+    )
+
+    func dataTask(
+        with request: URLRequest,
+        metricsHandler: @escaping ([String: Any]) -> Void,
+        completionHandler: @escaping (Data?, URLResponse?, Error?) -> Void
+    ) -> URLSessionDataTask {
+        let task = session.dataTask(
+            with: request,
+            completionHandler: completionHandler
+        )
+        lock.lock()
+        metricsHandlers[task.taskIdentifier] = metricsHandler
+        lock.unlock()
+        return task
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didFinishCollecting metrics: URLSessionTaskMetrics
+    ) {
+        lock.lock()
+        let handler = metricsHandlers.removeValue(forKey: task.taskIdentifier)
+        lock.unlock()
+        handler?(Self.fields(from: metrics))
+    }
+
+    private static func fields(
+        from metrics: URLSessionTaskMetrics
+    ) -> [String: Any] {
+        var fields: [String: Any] = [
+            "api_task_duration_ms": metrics.taskInterval.duration * 1_000,
+            "api_redirect_count": metrics.redirectCount,
+            "api_transaction_count": metrics.transactionMetrics.count
+        ]
+        guard let transaction = metrics.transactionMetrics.last else {
+            return fields
+        }
+
+        fields["api_fetch_type"] = String(describing: transaction.resourceFetchType)
+        fields["api_connection_reused"] = transaction.isReusedConnection
+        fields["api_proxy_connection"] = transaction.isProxyConnection
+        fields["api_network_protocol"] =
+            transaction.networkProtocolName ?? "unknown"
+        if let response = transaction.response as? HTTPURLResponse {
+            fields["api_status_code"] = response.statusCode
+        }
+
+        addDuration(
+            from: transaction.domainLookupStartDate,
+            to: transaction.domainLookupEndDate,
+            key: "api_dns_ms",
+            fields: &fields
+        )
+        addDuration(
+            from: transaction.connectStartDate,
+            to: transaction.connectEndDate,
+            key: "api_connect_ms",
+            fields: &fields
+        )
+        addDuration(
+            from: transaction.secureConnectionStartDate,
+            to: transaction.secureConnectionEndDate,
+            key: "api_tls_ms",
+            fields: &fields
+        )
+        addDuration(
+            from: transaction.requestStartDate,
+            to: transaction.responseStartDate,
+            key: "api_ttfb_ms",
+            fields: &fields
+        )
+        addDuration(
+            from: transaction.responseStartDate,
+            to: transaction.responseEndDate,
+            key: "api_download_ms",
+            fields: &fields
+        )
+        return fields
+    }
+
+    private static func addDuration(
+        from start: Date?,
+        to end: Date?,
+        key: String,
+        fields: inout [String: Any]
+    ) {
+        guard let start, let end else { return }
+        fields[key] = max(0, end.timeIntervalSince(start) * 1_000)
+    }
+}
+
 extension ViewController {
     func translateLongTextChunkUsingAPI(
         _ chunk: String,
@@ -41,7 +147,23 @@ extension ViewController {
             "Starting API \(provisional ? "provisional safety net" : "fallback", privacy: .public): chunkChars=\(chunk.count, privacy: .public)"
         )
         let requestedChunkIndex = translationCoordinator.chunkIndex
-        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        let apiStartedAt = CACurrentMediaTime()
+        let task = TranslationAPINetworkSession.shared.dataTask(
+            with: request,
+            metricsHandler: { [weak self] fields in
+                DispatchQueue.main.async {
+                    guard let self,
+                          self.translationTimingRequest?.id == timingRequestID else {
+                        return
+                    }
+                    self.logTranslationTiming(
+                        "api-network-metrics",
+                        diagnosticFields: fields
+                    )
+                }
+            }
+        ) { [weak self] data, response, error in
+            let apiDuration = (CACurrentMediaTime() - apiStartedAt) * 1_000
             let translation = data.flatMap(
                 TranslationServiceCoordinator.translationText(from:)
             )
@@ -50,12 +172,31 @@ extension ViewController {
                 !(translation?.isEmpty ?? true)
 
             DispatchQueue.main.async {
-                guard let self,
+                guard let self else { return }
+                if self.translationTimingRequest?.id == timingRequestID {
+                    var responseFields: [String: Any] = [
+                        "api_total_elapsed_ms": apiDuration,
+                        "api_response_bytes": data?.count ?? 0,
+                        "api_transport_succeeded": error == nil
+                    ]
+                    if let response = response as? HTTPURLResponse {
+                        responseFields["api_status_code"] = response.statusCode
+                    }
+                    if let error = error as NSError? {
+                        responseFields["api_error_domain"] = error.domain
+                        responseFields["api_error_code"] = error.code
+                    }
+                    self.logTranslationTiming(
+                        "api-response-completed",
+                        diagnosticFields: responseFields
+                    )
+                }
+                guard
                       self.isCurrentTranslationWork(session: session),
                       requestedChunkIndex == self.translationCoordinator.chunkIndex else {
-                    self?.logTranslationCoordinator(
+                    self.logTranslationCoordinator(
                         "fallback-cancelled-as-stale",
-                        source: self?.longTextSource,
+                        source: self.longTextSource,
                         requestID: timingRequestID,
                         session: session
                     )

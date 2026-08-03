@@ -5,6 +5,7 @@
 
 import Cocoa
 import os
+import WebKit
 
 extension ViewController {
     func logStartupTiming(_ event: String) {
@@ -47,6 +48,45 @@ extension ViewController {
 
     func updateTranslationTimingSession(_ session: Int) {
         translationTimingRequest?.session = session
+    }
+
+    func markTranslationWebServiceReady(_ webView: WKWebView) {
+        translationWebViewLastActivityAt[ObjectIdentifier(webView)] = Date()
+    }
+
+    func logTranslationWebServiceActivity(
+        in webView: WKWebView,
+        stage: String = "web-service-activity-measured"
+    ) {
+        let now = Date()
+        let key = ObjectIdentifier(webView)
+        let previousActivity = translationWebViewLastActivityAt[key]
+        translationWebViewLastActivityAt[key] = now
+
+        let role: String
+        if webView === automaticTranslationWebView {
+            role = "automatic"
+        } else if webView === parallelTranslationWebView {
+            role = "parallel"
+        } else if webView === standbyTranslationWebView {
+            role = "standby"
+        } else if webView === self.webView {
+            role = "primary"
+        } else {
+            role = "unknown"
+        }
+
+        var fields: [String: Any] = [
+            "webview_role": role,
+            "service_activity_known": previousActivity != nil
+        ]
+        if let previousActivity {
+            fields["service_idle_before_request_ms"] = max(
+                0,
+                now.timeIntervalSince(previousActivity) * 1_000
+            )
+        }
+        logTranslationTiming(stage, diagnosticFields: fields)
     }
 
     func logTranslationTiming(

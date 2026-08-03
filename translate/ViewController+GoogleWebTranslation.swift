@@ -45,6 +45,7 @@ extension ViewController {
             translateLongTextChunkUsingAPI(chunk, session: session)
             return
         }
+        logTranslationWebServiceActivity(in: serviceWebView)
         let encodingStartedAt = CACurrentMediaTime()
         let encoded = Data(chunk.utf8).base64EncodedString()
         logTranslationTiming(
@@ -65,8 +66,52 @@ extension ViewController {
                     requestID: \#(timingRequestID),
                     session: \#(session),
                     jsStartedAt,
-                    firstResultMutationAt: null
+                    firstResultMutationAt: null,
+                    inputDispatchedAt: jsStartedAt
                 };
+                const resourceTimingSummary = () => {
+                    const timing = window.__macTranslateActiveTiming;
+                    const baseline = timing?.inputDispatchedAt ?? jsStartedAt;
+                    const entries = performance.getEntriesByType("resource")
+                        .filter((entry) =>
+                            entry.startTime >= baseline &&
+                            ["fetch", "xmlhttprequest", "beacon"].includes(entry.initiatorType)
+                        );
+                    const relative = (value) => value > 0 ? value - baseline : -1;
+                    const detailed = entries.filter((entry) =>
+                        entry.requestStart > 0 && entry.responseStart > 0
+                    );
+                    const firstStart = entries.length
+                        ? Math.min(...entries.map((entry) => entry.startTime - baseline))
+                        : -1;
+                    const responseStarts = entries.map((entry) =>
+                        relative(entry.responseStart)).filter((value) => value >= 0);
+                    const responseEnds = entries.map((entry) =>
+                        relative(entry.responseEnd)).filter((value) => value >= 0);
+                    const longest = entries.length
+                        ? Math.max(...entries.map((entry) => entry.duration))
+                        : -1;
+                    const maximumTTFB = detailed.length
+                        ? Math.max(...detailed.map((entry) =>
+                            entry.responseStart - entry.requestStart))
+                        : -1;
+                    return {
+                        webNetworkRequestCount: entries.length,
+                        webNetworkDetailedCount: detailed.length,
+                        webNetworkFirstStartMS: firstStart,
+                        webNetworkFirstResponseMS: responseStarts.length
+                            ? Math.min(...responseStarts) : -1,
+                        webNetworkLastEndMS: responseEnds.length
+                            ? Math.max(...responseEnds) : -1,
+                        webNetworkLongestMS: longest,
+                        webNetworkMaxTTFBMS: maximumTTFB,
+                        webNetworkTransferBytes: entries.reduce(
+                            (total, entry) => total + (entry.transferSize || 0),
+                            0
+                        )
+                    };
+                };
+                window.__macTranslateResourceTimingSummary = resourceTimingSummary;
                 const value = new TextDecoder().decode(
                     Uint8Array.from(atob("\#(encoded)"), (character) =>
                         character.charCodeAt(0))
@@ -232,7 +277,7 @@ extension ViewController {
                         // fallback will resolve it without exposing stale DOM.
                         const payload = window.__macTranslateReadCurrentResult?.();
                         if (!payload || !payload[1]) return;
-                        window.webkit.messageHandlers.callbackHandler.postMessage({
+                        window.webkit.messageHandlers.callbackHandler.postMessage(Object.assign({
                             action: "translationDOMResult",
                             session: \#(session),
                             chunkIndex: \#(translationCoordinator.chunkIndex),
@@ -242,8 +287,10 @@ extension ViewController {
                             jsElapsedMS: performance.now() - jsStartedAt,
                             firstMutationMS: window.__macTranslateActiveTiming?.firstResultMutationAt == null
                                 ? -1
-                                : window.__macTranslateActiveTiming.firstResultMutationAt - jsStartedAt
-                        });
+                                : window.__macTranslateActiveTiming.firstResultMutationAt - jsStartedAt,
+                            pageVisibility: document.visibilityState,
+                            pageFocused: document.hasFocus()
+                        }, resourceTimingSummary()));
                     }, 45);
                 };
                 window.__macTranslateResultObserver = new MutationObserver(
@@ -267,6 +314,9 @@ extension ViewController {
                     // cycle and materially delays short translations.
                     setter.call(textarea, value);
                     const textareaWrittenAt = performance.now();
+                    const inputDispatchStartedAt = performance.now();
+                    window.__macTranslateActiveTiming.inputDispatchedAt =
+                        inputDispatchStartedAt;
                     textarea.dispatchEvent(new Event("input", { bubbles: true }));
                     const inputDispatchedAt = performance.now();
                     window.webkit.messageHandlers.callbackHandler.postMessage({
@@ -276,7 +326,9 @@ extension ViewController {
                         milestone: "injection-completed",
                         observerReadyMS: observerReadyAt - jsStartedAt,
                         textareaWrittenMS: textareaWrittenAt - jsStartedAt,
-                        inputDispatchedMS: inputDispatchedAt - jsStartedAt
+                        inputDispatchedMS: inputDispatchedAt - jsStartedAt,
+                        pageVisibility: document.visibilityState,
+                        pageFocused: document.hasFocus()
                     });
                 } else {
                     // The result may have completed before this observer was
@@ -285,7 +337,7 @@ extension ViewController {
                     setTimeout(() => {
                         const payload = window.__macTranslateReadCurrentResult?.();
                         if (!payload || !payload[1]) return;
-                        window.webkit.messageHandlers.callbackHandler.postMessage({
+                        window.webkit.messageHandlers.callbackHandler.postMessage(Object.assign({
                             action: "translationDOMResult",
                             session: \#(session),
                             chunkIndex: \#(translationCoordinator.chunkIndex),
@@ -295,13 +347,17 @@ extension ViewController {
                             jsElapsedMS: performance.now() - jsStartedAt,
                             firstMutationMS: window.__macTranslateActiveTiming?.firstResultMutationAt == null
                                 ? -1
-                                : window.__macTranslateActiveTiming.firstResultMutationAt - jsStartedAt
-                        });
+                                : window.__macTranslateActiveTiming.firstResultMutationAt - jsStartedAt,
+                            pageVisibility: document.visibilityState,
+                            pageFocused: document.hasFocus()
+                        }, resourceTimingSummary()));
                     }, 0);
                 }
                 return [textarea.value, {
                     jsStartedMS: jsStartedAt,
-                    completionMS: performance.now() - jsStartedAt
+                    completionMS: performance.now() - jsStartedAt,
+                    pageVisibility: document.visibilityState,
+                    pageFocused: document.hasFocus()
                 }];
             })();
         """#) { [weak self] result, _ in
@@ -309,12 +365,25 @@ extension ViewController {
                   session == self.translationCoordinator.session,
                   self.translationCoordinator.activeWebViewGeneration == serviceGeneration,
                   self.activeTranslationWebView === serviceWebView else { return }
-            self.logTranslationTiming(
-                "evaluate-javascript-completion",
-                details: String(format: "swift_duration_ms=%.3f", (CACurrentMediaTime() - evaluationStartedAt) * 1_000)
-            )
+            let swiftDuration = (CACurrentMediaTime() - evaluationStartedAt) * 1_000
             let resultPayload = result as? [Any]
             let returnedSource = resultPayload?.first as? String
+            let javaScriptMetrics = resultPayload?.dropFirst().first as? [String: Any]
+            let javaScriptDuration =
+                (javaScriptMetrics?["completionMS"] as? NSNumber)?.doubleValue ?? 0
+            let dispatchRoundTrip = max(0, swiftDuration - javaScriptDuration)
+            self.translationTimingRequest?.webKitDispatchRoundTripMilliseconds = dispatchRoundTrip
+            self.logTranslationTiming(
+                "evaluate-javascript-completion",
+                details: String(format: "swift_duration_ms=%.3f", swiftDuration),
+                diagnosticFields: [
+                    "swift_evaluate_duration_ms": swiftDuration,
+                    "javascript_execution_ms": javaScriptDuration,
+                    "webkit_dispatch_roundtrip_ms": dispatchRoundTrip,
+                    "page_visibility": javaScriptMetrics?["pageVisibility"] as? String ?? "unknown",
+                    "page_focused": javaScriptMetrics?["pageFocused"] as? Bool ?? false
+                ]
+            )
             logTextPipelineSnapshot("4-google-textarea-after-write", returnedSource)
             if !self.didLogFirstTextInjection,
                let injectedSource = returnedSource,
