@@ -110,6 +110,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         var didLogFirstValidExtraction = false
         var didLogFirstValidJSResult = false
         var didLogFirstDisplay = false
+        var didLogFirstVerifiedDisplay = false
         var didLogStableResult = false
         var didLogFinalDisplay = false
     }
@@ -198,6 +199,8 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     let longTextTranslationDebounce: TimeInterval = 0.12
     let longTextPollInterval: TimeInterval = 0.15
     let longTextResultSettlingInterval: TimeInterval = 0.55
+    let webStallRecoveryDelay: TimeInterval = 1.35
+    let coldResumeIdleThreshold: TimeInterval = 30 * 60
     // Give Google a short, bounded chance to produce its preferred result.
     // API work starts earlier as a provisional safety net, so a stalled chunk
     // does not add the former six-second delay to every oversized document.

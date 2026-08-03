@@ -67,6 +67,10 @@ final class TranslationPerformanceDiagnostics {
         let utf16Count: Int
         let direction: String
         var firstResultAt: CFTimeInterval?
+        var firstVisibleResultAt: CFTimeInterval?
+        var firstVisibleResultProvider: String?
+        var idleBeforeRequestMilliseconds: Double?
+        var coldResumeHedgeStarted = false
         var observerRegisteredCount = 0
         var observerDisconnectedCount = 0
         var timerScheduledCount = 0
@@ -258,7 +262,7 @@ final class TranslationPerformanceDiagnostics {
         let elapsed = max(0, (now - context.startedAt) * 1_000)
         let stageDuration = max(0, (now - context.lastEventAt) * 1_000)
         context.lastEventAt = now
-        updateCounters(for: stage, context: &context, at: now)
+        updateCounters(for: stage, extra: extra, context: &context, at: now)
         requests[requestID] = context
         var record: [String: Any] = [
             "timestamp": Self.timestamp(),
@@ -279,11 +283,24 @@ final class TranslationPerformanceDiagnostics {
 
     private func updateCounters(
         for stage: String,
+        extra: [String: Any],
         context: inout RequestContext,
         at now: CFTimeInterval
     ) {
         if stage == "first-valid-result-displayed", context.firstResultAt == nil {
             context.firstResultAt = now
+        }
+        if stage == "first-visible-result-displayed",
+           context.firstVisibleResultAt == nil {
+            context.firstVisibleResultAt = now
+            context.firstVisibleResultProvider = extra["provider"] as? String
+        }
+        if stage == "translation-idle-measured" {
+            context.idleBeforeRequestMilliseconds =
+                (extra["idle_before_request_ms"] as? NSNumber)?.doubleValue
+        }
+        if stage == "cold-resume-hedge-started" {
+            context.coldResumeHedgeStarted = true
         }
         if stage.contains("observer-registered") || stage == "js-observer-ready" {
             context.observerRegisteredCount += 1
@@ -312,6 +329,9 @@ final class TranslationPerformanceDiagnostics {
         let firstResultElapsed = context.firstResultAt.map {
             Self.roundedMilliseconds(max(0, ($0 - context.startedAt) * 1_000))
         }
+        let firstVisibleResultElapsed = context.firstVisibleResultAt.map {
+            Self.roundedMilliseconds(max(0, ($0 - context.startedAt) * 1_000))
+        }
         var summary: [String: Any] = [
             "timestamp": Self.timestamp(),
             "run_id": runID,
@@ -329,9 +349,19 @@ final class TranslationPerformanceDiagnostics {
             "timer_scheduled_count": context.timerScheduledCount,
             "timer_fired_count": context.timerFiredCount,
             "timer_cancelled_count": context.timerCancelledCount,
-            "state_transition_count": context.stateTransitionCount
+            "state_transition_count": context.stateTransitionCount,
+            "cold_resume_hedge_started": context.coldResumeHedgeStarted
         ]
         if let firstResultElapsed { summary["first_result_elapsed_ms"] = firstResultElapsed }
+        if let firstVisibleResultElapsed {
+            summary["first_visible_result_elapsed_ms"] = firstVisibleResultElapsed
+        }
+        if let provider = context.firstVisibleResultProvider {
+            summary["first_visible_result_provider"] = provider
+        }
+        if let idleMilliseconds = context.idleBeforeRequestMilliseconds {
+            summary["idle_before_request_ms"] = idleMilliseconds
+        }
         summary.merge(AppBuildMetadata.logFields) { _, new in new }
         appendRecord(summary)
     }

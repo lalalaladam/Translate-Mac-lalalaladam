@@ -63,7 +63,10 @@ final class TranslationServiceCoordinator {
     var webHasValidCandidate = false
     var provisionalFallbackStarted = false
     var provisionalFallbackTranslation: String?
+    var provisionalFallbackPreviewDisplayed = false
     var fallbackShouldFinalize = false
+    var lastWebActivityAt: Date?
+    var coldResumeHedgeActive = false
 
     var debounceWorkItem: DispatchWorkItem?
     var fallbackTask: URLSessionDataTask?
@@ -113,7 +116,9 @@ final class TranslationServiceCoordinator {
         webHasValidCandidate = false
         provisionalFallbackStarted = false
         provisionalFallbackTranslation = nil
+        provisionalFallbackPreviewDisplayed = false
         fallbackShouldFinalize = false
+        coldResumeHedgeActive = false
         candidateTranslation = nil
         candidateUpdatedAt = nil
         chunks.removeAll(keepingCapacity: true)
@@ -137,18 +142,34 @@ final class TranslationServiceCoordinator {
         )
     }
 
-    func prepareNextChunk(webResultDeadline: TimeInterval) {
+    @discardableResult
+    func prepareNextChunk(
+        webResultDeadline: TimeInterval,
+        coldResumeIdleThreshold: TimeInterval
+    ) -> TimeInterval? {
+        let now = Date()
+        let idleDuration = lastWebActivityAt.map { now.timeIntervalSince($0) }
+        lastWebActivityAt = now
         pollAttempts = 0
         chunkRetryCount = 0
-        webDeadline = Date().addingTimeInterval(webResultDeadline)
-        webStartedAt = Date()
+        webDeadline = now.addingTimeInterval(webResultDeadline)
+        webStartedAt = now
         webRetryTriggered = false
         webHasValidCandidate = false
         provisionalFallbackStarted = false
         provisionalFallbackTranslation = nil
+        provisionalFallbackPreviewDisplayed = false
         fallbackShouldFinalize = false
+        coldResumeHedgeActive = idleDuration.map {
+            $0 >= coldResumeIdleThreshold
+        } ?? false
         candidateTranslation = nil
         candidateUpdatedAt = nil
+        return idleDuration
+    }
+
+    func markWebServiceActive() {
+        lastWebActivityAt = Date()
     }
 
     func clearCompletedSnapshot() {
