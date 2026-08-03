@@ -38,7 +38,7 @@ extension ViewController {
         }
 
         translationPipelineLogger.info(
-            "Google Web translation unavailable; using API \(provisional ? "provisional preview" : "fallback", privacy: .public): chunkChars=\(chunk.count, privacy: .public)"
+            "Starting API \(provisional ? "provisional safety net" : "fallback", privacy: .public): chunkChars=\(chunk.count, privacy: .public)"
         )
         let requestedChunkIndex = translationCoordinator.chunkIndex
         let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
@@ -82,6 +82,10 @@ extension ViewController {
                     translationPipelineLogger.error(
                         "Translation chunk failed after retry: chunkIndex=\(self.translationCoordinator.chunkIndex, privacy: .public), status=\((response as? HTTPURLResponse)?.statusCode ?? -1, privacy: .public), error=\(String(describing: error), privacy: .public)"
                     )
+                    if provisional {
+                        self.logTranslationTiming("api-provisional-failed-web-continues")
+                        return
+                    }
                     self.finishLongTextTranslationWithError(session: session)
                     return
                 }
@@ -96,7 +100,9 @@ extension ViewController {
                     // exists, so the first visible result never flashes from
                     // API to Web.
                     self.translationCoordinator.provisionalFallbackTranslation = normalized
-                    self.logTranslationTiming("api-provisional-ready-hidden")
+                    if !self.previewProvisionalAPITranslationIfReady(session: session) {
+                        self.logTranslationTiming("api-provisional-ready-hidden")
+                    }
                 } else {
                     self.appendLongTextTranslation(
                         translation,
@@ -126,6 +132,49 @@ extension ViewController {
             for: source,
             selectedLanguage: currentSourceLanguage
         ).rawValue
+    }
+
+    func logFirstVisibleTranslationIfNeeded(provider: TranslationResultProvider) {
+        guard translationTimingRequest?.didLogFirstDisplay == false else { return }
+        translationTimingRequest?.didLogFirstDisplay = true
+        logTranslationTiming(
+            "first-visible-result-displayed",
+            diagnosticFields: [
+                "provider": provider == .web ? "web" : "api"
+            ]
+        )
+    }
+
+    @discardableResult
+    func previewProvisionalAPITranslationIfReady(session: Int) -> Bool {
+        guard session == translationCoordinator.session,
+              translationCoordinator.coldResumeHedgeActive,
+              !translationCoordinator.provisionalFallbackPreviewDisplayed,
+              !translationCoordinator.webHasValidCandidate,
+              translationCoordinator.webStartedAt.map({
+                  Date().timeIntervalSince($0) >= webStallRecoveryDelay
+              }) == true,
+              translationCoordinator.chunkIndex == 0,
+              translationCoordinator.chunks.count == 1,
+              let translation = translationCoordinator.provisionalFallbackTranslation,
+              !translation.isEmpty,
+              let currentSource = longTextSource,
+              longTextSourceView?.string == currentSource else {
+            return false
+        }
+
+        translationCoordinator.provisionalFallbackPreviewDisplayed = true
+        longTextTranslationView?.string = translation
+        logFirstVisibleTranslationIfNeeded(provider: .api)
+        logTranslationTiming("api-provisional-preview-displayed")
+        updateInlineLongText(
+            source: nil,
+            translation: translation,
+            status: longTextStatusLabel?.stringValue ?? ""
+        )
+        workspaceTranslationCountLabel?.stringValue = textCountDescription(translation)
+        longTextTranslationLabel?.stringValue = textCountDescription(translation)
+        return true
     }
 
     @discardableResult
@@ -172,6 +221,7 @@ extension ViewController {
         translationCoordinator.webDeadline = nil
         translationResultProviders.insert(provider)
         longTextTranslationView?.string = longTextTranslation
+        logFirstVisibleTranslationIfNeeded(provider: provider)
         if translationTimingRequest?.didLogFinalDisplay == false {
             translationTimingRequest?.didLogFinalDisplay = true
             logTranslationTiming("final-result-displayed", details: "source=\(source)")
@@ -196,9 +246,6 @@ extension ViewController {
     ) {
         guard session == translationCoordinator.session else { return }
         logTranslationTiming("result-display-rejected-\(reason)")
-        translationPipelineLogger.error(
-            "Stable translation could not be displayed: reason=\(reason, privacy: .public), session=\(session, privacy: .public)"
-        )
 
         guard translationCoordinator.lastRecoveredResultDisplaySession != session else { return }
         translationCoordinator.lastRecoveredResultDisplaySession = session
@@ -209,6 +256,9 @@ extension ViewController {
         // Never rewrite or submit marked text owned by an input method. Its
         // normal commit notification will enqueue the authoritative source.
         guard !sourceView.hasMarkedText() else {
+            translationPipelineLogger.info(
+                "Stable translation deferred for active input method: reason=\(reason, privacy: .public), session=\(session, privacy: .public)"
+            )
             logTranslationTiming("result-display-recovery-waiting-for-ime")
             logTranslationStateTransition(
                 from: "result-display-rejected",
@@ -222,6 +272,10 @@ extension ViewController {
             scheduleIMECompositionEndCheck()
             return
         }
+
+        translationPipelineLogger.error(
+            "Stable translation could not be displayed: reason=\(reason, privacy: .public), session=\(session, privacy: .public)"
+        )
 
         let latestSource = sourceView.string
         guard !latestSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

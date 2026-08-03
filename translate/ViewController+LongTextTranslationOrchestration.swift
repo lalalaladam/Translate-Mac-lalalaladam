@@ -99,9 +99,26 @@ extension ViewController {
             translateNextLongTextChunk(session: session)
             return
         }
-        translationCoordinator.prepareNextChunk(
-            webResultDeadline: longTextWebResultDeadline
+        let idleDuration = translationCoordinator.prepareNextChunk(
+            webResultDeadline: longTextWebResultDeadline,
+            coldResumeIdleThreshold: coldResumeIdleThreshold
         )
+        if let idleDuration {
+            let idleMilliseconds = max(0, idleDuration * 1_000)
+            logTranslationTiming(
+                "translation-idle-measured",
+                details: String(
+                    format: "idle_ms=%.0f cold_resume=%@",
+                    idleMilliseconds,
+                    translationCoordinator.coldResumeHedgeActive ? "true" : "false"
+                ),
+                diagnosticFields: [
+                    "idle_before_request_ms": idleMilliseconds,
+                    "cold_resume_threshold_ms": coldResumeIdleThreshold * 1_000,
+                    "cold_resume": translationCoordinator.coldResumeHedgeActive
+                ]
+            )
+        }
         // A Return-only edit should behave like Google Translate Web: retain
         // the completed result and controls while the paragraph boundaries
         // are refreshed, instead of flashing a new translation cycle.
@@ -109,6 +126,16 @@ extension ViewController {
             translationCoordinator.formattingOnlyRefresh ? .completed : .translating
         )
         updateInlineLongText(source: nil, translation: longTextTranslation, status: status)
+
+        if translationCoordinator.coldResumeHedgeActive {
+            translationCoordinator.provisionalFallbackStarted = true
+            logTranslationTiming("cold-resume-hedge-started")
+            translateLongTextChunkUsingAPI(
+                chunk,
+                session: session,
+                provisional: true
+            )
+        }
 
         // Keep the WebView hidden, but prefer the same Google Translate Web
         // result that the pre-1.0 versions displayed.  The Web and

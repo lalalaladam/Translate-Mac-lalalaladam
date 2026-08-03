@@ -22,9 +22,10 @@ extension ViewController {
         }
 
         let webElapsed = translationCoordinator.webStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-        if webElapsed >= 1.35,
+        if webElapsed >= webStallRecoveryDelay,
            translationCoordinator.candidateTranslation == nil {
             let chunk = translationCoordinator.chunks[translationCoordinator.chunkIndex].text
+            previewProvisionalAPITranslationIfReady(session: session)
             if !translationCoordinator.webRetryTriggered,
                retryStalledTranslationOnParallelWebView(chunk, session: session) {
                 translationCoordinator.webRetryTriggered = true
@@ -355,9 +356,13 @@ extension ViewController {
               !translation.isEmpty else { return }
 
         longTextTranslationView?.string = translation
-        if translationTimingRequest?.didLogFirstDisplay == false {
-            translationTimingRequest?.didLogFirstDisplay = true
-            logTranslationTiming("first-valid-result-displayed")
+        logFirstVisibleTranslationIfNeeded(provider: .web)
+        if translationTimingRequest?.didLogFirstVerifiedDisplay == false {
+            translationTimingRequest?.didLogFirstVerifiedDisplay = true
+            logTranslationTiming(
+                "first-valid-result-displayed",
+                diagnosticFields: ["provider": "web"]
+            )
         }
         updateInlineLongText(
             source: nil,

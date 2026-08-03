@@ -239,6 +239,7 @@ extension ViewController {
 
         let hadPendingPrimaryRequest = pendingPrimaryTranslationSource != nil
         markReady()
+        translationCoordinator.markWebServiceActive()
         logStartupTiming("Primary translation service ready")
         logTranslationTiming("primary-translation-service-ready")
         logInputMethodTiming("primary-translation-service-ready", webFocus: false)
