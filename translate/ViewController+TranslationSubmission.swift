@@ -125,6 +125,18 @@ extension ViewController {
                 translationCoordinator.completedSource
             ) == translationCoordinator.textRemovingLineBreaks(source)
         let chunks = translationCoordinator.splitLongText(source)
+        if effectiveSourceLanguage != .automatic,
+           chunks.count == 1,
+           prefersParallelTranslationWebView,
+           parallelTranslationWebViewReady,
+           translationPageMatches(
+               source: effectiveSourceLanguage,
+               target: targetLanguage,
+               in: parallelTranslationWebView
+           ) {
+            activeTranslationWebView = parallelTranslationWebView
+            logTranslationTiming("healthy-parallel-webview-reused")
+        }
         translationResultProviders.removeAll()
         // Each completed start owns one WebView channel.  A delayed DOM
         // callback from the other preloaded Google page must never complete
@@ -277,6 +289,7 @@ extension ViewController {
 
     func invalidateActiveTranslationWork(source: String?) {
         let invalidatedRequestID = translationTimingRequest?.id
+        cancelAutomaticTranslationServiceWarmup()
         cancelParallelWebTranslationBatch()
         let invalidation = translationCoordinator.invalidate()
         let hadActiveRequest = translationTimingRequest != nil || invalidation.hadPipelineWork

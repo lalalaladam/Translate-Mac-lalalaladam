@@ -148,6 +148,7 @@ extension ViewController {
         withError error: Error
     ) {
         if webView === parallelTranslationWebView {
+            prefersParallelTranslationWebView = false
             parallelTranslationWebViewReady = false
             parallelTranslationWebViewLoading = false
             return
@@ -172,6 +173,7 @@ extension ViewController {
         withError error: Error
     ) {
         if webView === parallelTranslationWebView {
+            prefersParallelTranslationWebView = false
             parallelTranslationWebViewReady = false
             parallelTranslationWebViewLoading = false
             return
@@ -379,6 +381,32 @@ extension ViewController {
         )
     }
 
+    func cancelAutomaticTranslationServiceWarmup() {
+        automaticTranslationWarmupWorkItem?.cancel()
+        automaticTranslationWarmupWorkItem = nil
+    }
+
+    func scheduleAutomaticTranslationServiceWarmup() {
+        cancelAutomaticTranslationServiceWarmup()
+        let target = currentTargetLanguage
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.currentTargetLanguage == target,
+                  self.longTextStatusState == .completed,
+                  self.translationCoordinator.debounceWorkItem == nil,
+                  !self.languageSwapInProgress,
+                  self.longTextSourceView?.hasMarkedText() != true else {
+                return
+            }
+            self.automaticTranslationWarmupWorkItem = nil
+            self.loadAutomaticTranslationService(target: target)
+        }
+        automaticTranslationWarmupWorkItem = workItem
+        // Keep navigation completely outside the typing and result-display
+        // paths. A later input cancels this work item before it can fire.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: workItem)
+    }
+
     func warmParallelTranslationService(
         source: TranslateLanguage,
         target: TranslateLanguage
@@ -401,6 +429,7 @@ extension ViewController {
 
         parallelTranslationSource = source
         parallelTranslationTarget = target
+        prefersParallelTranslationWebView = false
         parallelTranslationWebViewReady = false
         parallelTranslationWebViewLoading = true
         logStartupTiming("Parallel same-direction page load started")
