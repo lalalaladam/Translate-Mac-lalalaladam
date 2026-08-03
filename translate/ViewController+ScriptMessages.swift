@@ -145,6 +145,7 @@ extension ViewController: WKScriptMessageHandler {
                 if translationCoordinator.noteValidGoogleWebCandidate() {
                     logTranslationTiming("api-provisional-cancelled-web-won")
                 }
+                rememberSuccessfulWebViewAfterStallRecovery()
                 translationCoordinator.recordCandidate(translation)
                 previewSingleChunkTranslationIfSafe(
                     translation,

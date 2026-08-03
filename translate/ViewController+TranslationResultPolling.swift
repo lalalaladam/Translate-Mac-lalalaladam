@@ -27,7 +27,7 @@ extension ViewController {
             let chunk = translationCoordinator.chunks[translationCoordinator.chunkIndex].text
             previewProvisionalAPITranslationIfReady(session: session)
             if !translationCoordinator.webRetryTriggered,
-               retryStalledTranslationOnParallelWebView(chunk, session: session) {
+               retryStalledTranslationOnAlternateWebView(chunk, session: session) {
                 translationCoordinator.webRetryTriggered = true
                 return
             }
@@ -205,6 +205,7 @@ extension ViewController {
             if self.translationCoordinator.noteValidGoogleWebCandidate() {
                 self.logTranslationTiming("api-provisional-cancelled-web-won")
             }
+            self.rememberSuccessfulWebViewAfterStallRecovery()
 
             if self.translationTimingRequest?.didLogFirstValidExtraction == false {
                 self.translationTimingRequest?.didLogFirstValidExtraction = true

@@ -8,31 +8,68 @@ import WebKit
 
 extension ViewController {
     @discardableResult
-    func retryStalledTranslationOnParallelWebView(
+    func retryStalledTranslationOnAlternateWebView(
         _ chunk: String,
         session: Int
     ) -> Bool {
         guard session == translationCoordinator.session,
               translationCoordinator.chunks.count == 1,
-              parallelTranslationWebViewReady,
-              activeTranslationWebView !== parallelTranslationWebView,
-              translationPageMatches(
-                  source: TranslateLanguage(rawValue: longTextSourceLanguage) ?? .automatic,
-                  target: TranslateLanguage(rawValue: longTextTargetLanguage) ?? .simplifiedChinese,
-                  in: parallelTranslationWebView
-              ) else {
+              let currentWebView = activeTranslationWebView else {
             return false
         }
 
-        activeTranslationWebView?.evaluateJavaScript(
+        let sourceLanguage = TranslateLanguage(rawValue: longTextSourceLanguage) ?? .automatic
+        let targetLanguage = TranslateLanguage(rawValue: longTextTargetLanguage) ?? .simplifiedChinese
+        let alternateWebView: WKWebView
+        let retryStage: String
+        if currentWebView === parallelTranslationWebView {
+            prefersParallelTranslationWebView = false
+            guard isReady,
+                  translationPageMatches(
+                      source: sourceLanguage,
+                      target: targetLanguage,
+                      in: webView
+                  ) else {
+                return false
+            }
+            alternateWebView = webView
+            retryStage = "web-stall-primary-webview-retry"
+        } else {
+            guard parallelTranslationWebViewReady,
+                  translationPageMatches(
+                      source: sourceLanguage,
+                      target: targetLanguage,
+                      in: parallelTranslationWebView
+                  ) else {
+                return false
+            }
+            alternateWebView = parallelTranslationWebView
+            retryStage = "web-stall-parallel-webview-retry"
+        }
+
+        currentWebView.evaluateJavaScript(
             "window.__macTranslateResultObserver?.disconnect();",
             completionHandler: nil
         )
         translationCoordinator.activeWebViewGeneration += 1
-        activeTranslationWebView = parallelTranslationWebView
-        logTranslationTiming("web-stall-parallel-webview-retry")
+        activeTranslationWebView = alternateWebView
+        logTranslationTiming(retryStage)
         translateLongTextChunkUsingGoogleWeb(chunk, session: session)
         return true
+    }
+
+    func rememberSuccessfulWebViewAfterStallRecovery() {
+        guard translationCoordinator.webRetryTriggered,
+              longTextSourceLanguage != TranslateLanguage.automatic.rawValue else {
+            return
+        }
+        if activeTranslationWebView === parallelTranslationWebView {
+            guard !prefersParallelTranslationWebView else { return }
+            prefersParallelTranslationWebView = true
+            logTranslationTiming("healthy-parallel-webview-preferred")
+        } else if activeTranslationWebView === webView {
+            prefersParallelTranslationWebView = false
+        }
     }
 
     func translateLongTextChunkUsingGoogleWeb(

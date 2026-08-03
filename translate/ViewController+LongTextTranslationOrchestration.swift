@@ -75,6 +75,7 @@ extension ViewController {
             translationCoordinator.formattingOnlyRefresh = false
             updateInlineLongText(source: nil, translation: longTextTranslation, status: status)
             updateLongTextLabels()
+            scheduleAutomaticTranslationServiceWarmup()
             warmParallelTranslationService(
                 source: TranslateLanguage(rawValue: longTextSourceLanguage) ?? .automatic,
                 target: TranslateLanguage(rawValue: longTextTargetLanguage) ?? .simplifiedChinese

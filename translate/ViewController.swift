@@ -90,6 +90,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var parallelTranslationWebViewLoading = false
     var parallelTranslationSource = TranslateLanguagePreferences.source
     var parallelTranslationTarget = TranslateLanguagePreferences.target
+    var prefersParallelTranslationWebView = false
     var parallelWebTranslationBatch: ParallelWebTranslationBatch?
     var pendingAutomaticTranslationSource: String?
     var pendingAutomaticTranslationSession: Int?
@@ -137,6 +138,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var loadTimeoutWorkItem: DispatchWorkItem?
     var delayedConnectionOverlayWorkItem: DispatchWorkItem?
     var automaticRetryWorkItem: DispatchWorkItem?
+    var automaticTranslationWarmupWorkItem: DispatchWorkItem?
     var translationLoadAttempt = 0
     // The workspace is intentionally a transparent content layer. The main
     // window already owns the single behind-window glass effect used by the
@@ -248,6 +250,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         loadTimeoutWorkItem?.cancel()
         delayedConnectionOverlayWorkItem?.cancel()
         automaticRetryWorkItem?.cancel()
+        automaticTranslationWarmupWorkItem?.cancel()
         translationCoordinator.debounceWorkItem?.cancel()
         stopSpeaking()
     }
