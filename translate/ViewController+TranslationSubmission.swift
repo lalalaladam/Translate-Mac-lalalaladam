@@ -147,6 +147,10 @@ extension ViewController {
             formattingOnly: formattingOnlyRefresh,
             concurrentAPIChunkThreshold: concurrentAPIChunkThreshold
         )
+        if !formattingOnlyRefresh {
+            (longTextTranslationView?.enclosingScrollView as? TranslationResultScrollView)?
+                .beginTailFollowingSession(session)
+        }
         updateTranslationTimingSession(session)
         longTextSource = source
         longTextTranslation = keepsCompatibleVisibleResult ? translationCoordinator.completedTranslation : ""
