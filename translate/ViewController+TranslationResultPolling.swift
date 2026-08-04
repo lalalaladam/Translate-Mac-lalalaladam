@@ -356,7 +356,7 @@ extension ViewController {
               longTextSourceView?.string == currentSource,
               !translation.isEmpty else { return }
 
-        longTextTranslationView?.string = translation
+        displayLongTextTranslationFollowingTail(translation)
         logFirstVisibleTranslationIfNeeded(provider: .web)
         if translationTimingRequest?.didLogFirstVerifiedDisplay == false {
             translationTimingRequest?.didLogFirstVerifiedDisplay = true

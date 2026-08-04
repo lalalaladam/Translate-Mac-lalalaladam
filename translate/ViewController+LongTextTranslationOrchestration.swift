@@ -21,6 +21,7 @@ struct ParallelWebTranslationBatch {
     let session: Int
     let deadline: Date
     var chunks: [Int: ParallelWebTranslationChunk]
+    var previewedTranslation: String? = nil
     var inFlightChunkIndexes: Set<Int> = []
     var scheduledPoll: DispatchWorkItem?
 }
@@ -95,7 +96,7 @@ extension ViewController {
         let chunk = translationCoordinator.chunks[translationCoordinator.chunkIndex].text
         if chunk.isEmpty {
             longTextTranslation.append(translationCoordinator.chunks[translationCoordinator.chunkIndex].separatorAfter)
-            longTextTranslationView?.string = longTextTranslation
+            displayLongTextTranslationFollowingTail(longTextTranslation)
             translationCoordinator.chunkIndex += 1
             translateNextLongTextChunk(session: session)
             return
@@ -177,7 +178,7 @@ extension ViewController {
                         self.longTextTranslation.append(result.separator)
                     }
                 }
-                self.longTextTranslationView?.string = self.longTextTranslation
+                self.displayLongTextTranslationFollowingTail(self.longTextTranslation)
                 self.updateInlineLongText(
                     source: nil,
                     translation: self.longTextTranslation,
@@ -512,8 +513,56 @@ extension ViewController {
         }
         batch.chunks[chunkIndex] = chunk
         parallelWebTranslationBatch = batch
+        previewParallelWebTranslationIfSafe(session: session)
         finishParallelWebTranslationIfComplete(session: session)
         scheduleParallelWebPoll(session: session)
+    }
+
+    /// Match the immediate verified preview used by a one-chunk Web request
+    /// without weakening the final two-chunk commit. Both sources have already
+    /// been matched and normalized before reaching this point. Keep the preview
+    /// out of the final translation buffers and show it only once, so later DOM
+    /// refinements can cause at most one replacement when the stable result is
+    /// committed.
+    func previewParallelWebTranslationIfSafe(session: Int) {
+        guard var batch = parallelWebTranslationBatch,
+              batch.session == session,
+              session == translationCoordinator.session,
+              batch.previewedTranslation == nil,
+              batch.chunks.count == translationCoordinator.chunks.count,
+              batch.chunks.values.allSatisfy({ $0.candidateTranslation != nil }),
+              let currentSource = longTextSource,
+              longTextSourceView?.string == currentSource else {
+            return
+        }
+        let assembledPreview = (0..<translationCoordinator.chunks.count).compactMap {
+            batch.chunks[$0].flatMap { chunk in
+                chunk.candidateTranslation.map { $0 + chunk.separatorAfter }
+            }
+        }.joined()
+        guard !assembledPreview.isEmpty else { return }
+
+        batch.previewedTranslation = assembledPreview
+        parallelWebTranslationBatch = batch
+        displayLongTextTranslationFollowingTail(assembledPreview)
+        logFirstVisibleTranslationIfNeeded(provider: .web)
+        if translationTimingRequest?.didLogFirstVerifiedDisplay == false {
+            translationTimingRequest?.didLogFirstVerifiedDisplay = true
+            logTranslationTiming(
+                "first-valid-result-displayed",
+                diagnosticFields: ["provider": "web"]
+            )
+        }
+        logTranslationTiming("parallel-web-provisional-displayed")
+        updateInlineLongText(
+            source: nil,
+            translation: assembledPreview,
+            status: longTextStatusLabel?.stringValue ?? ""
+        )
+        workspaceTranslationCountLabel?.stringValue =
+            textCountDescription(assembledPreview)
+        longTextTranslationLabel?.stringValue =
+            textCountDescription(assembledPreview)
     }
 
     func scheduleParallelWebPoll(
@@ -572,7 +621,7 @@ extension ViewController {
         } else {
             longTextTranslation.append(assembledTranslation)
         }
-        longTextTranslationView?.string = longTextTranslation
+        displayLongTextTranslationFollowingTail(longTextTranslation)
         translationResultProviders.insert(.web)
         translationCoordinator.chunkIndex = translationCoordinator.chunks.count
         logTranslationTiming("parallel-web-batch-completed")
