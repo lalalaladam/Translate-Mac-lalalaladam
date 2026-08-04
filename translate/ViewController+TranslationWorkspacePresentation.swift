@@ -12,8 +12,19 @@ extension ViewController {
     func displayLongTextTranslationFollowingTail(_ translation: String) {
         guard let translationView = longTextTranslationView else { return }
         translationView.string = translation
-        (translationView.enclosingScrollView as? TranslationResultScrollView)?
-            .scrollToTailIfFollowing(translationView)
+        guard let scrollView = translationView.enclosingScrollView as? TranslationResultScrollView else {
+            TranslationPerformanceDiagnostics.shared.recordTailFollowingEvent(
+                stage: "tail-follow-scroll-unavailable",
+                status: "unexpected-scroll-view",
+                sequence: 0,
+                trigger: "result-update",
+                followsTail: nil,
+                resultUTF16: (translation as NSString).length,
+                reason: "result-scroll-view-type-mismatch"
+            )
+            return
+        }
+        scrollView.scrollToTailIfFollowing(translationView)
     }
 
     func activateInlineLongText(source: String) {

@@ -146,6 +146,7 @@ final class TranslationResultTextView: AlignmentTextView {}
 final class TranslationResultScrollView: NSScrollView {
     private(set) var followsTail = true
     private var liveScrollObservers: [NSObjectProtocol] = []
+    private var tailScrollSequence = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -163,16 +164,52 @@ final class TranslationResultScrollView: NSScrollView {
 
     override func scrollWheel(with event: NSEvent) {
         super.scrollWheel(with: event)
-        updateTailFollowingFromUserScroll()
+        updateTailFollowingFromUserScroll(trigger: "scroll-wheel")
     }
 
     func scrollToTailIfFollowing(_ textView: NSTextView) {
-        guard followsTail else { return }
+        tailScrollSequence += 1
+        let sequence = tailScrollSequence
+        guard followsTail else {
+            recordTailEvent(
+                "tail-follow-scroll-skipped",
+                status: "not-following",
+                sequence: sequence,
+                trigger: "result-update",
+                textView: textView,
+                reason: "follows-tail-false"
+            )
+            return
+        }
+        recordTailEvent(
+            "tail-follow-scroll-scheduled",
+            status: "scheduled",
+            sequence: sequence,
+            trigger: "result-update",
+            textView: textView
+        )
         DispatchQueue.main.async { [weak self, weak textView] in
-            guard let self,
-                  self.followsTail,
-                  let textView,
-                  textView.enclosingScrollView === self else {
+            guard let self, let textView else { return }
+            guard self.followsTail else {
+                self.recordTailEvent(
+                    "tail-follow-scroll-aborted",
+                    status: "not-following",
+                    sequence: sequence,
+                    trigger: "async-execution",
+                    textView: textView,
+                    reason: "follows-tail-changed"
+                )
+                return
+            }
+            guard textView.enclosingScrollView === self else {
+                self.recordTailEvent(
+                    "tail-follow-scroll-aborted",
+                    status: "detached",
+                    sequence: sequence,
+                    trigger: "async-execution",
+                    textView: textView,
+                    reason: "text-view-owner-changed"
+                )
                 return
             }
             if let layoutManager = textView.layoutManager,
@@ -182,6 +219,26 @@ final class TranslationResultScrollView: NSScrollView {
             textView.scrollRangeToVisible(
                 NSRange(location: (textView.string as NSString).length, length: 0)
             )
+            self.recordTailEvent(
+                "tail-follow-scroll-applied",
+                status: "applied",
+                sequence: sequence,
+                trigger: "async-execution",
+                textView: textView
+            )
+            if AppBuildMetadata.isDebugBuild {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak textView] in
+                    guard let self, let textView else { return }
+                    self.recordTailEvent(
+                        "tail-follow-scroll-verified",
+                        status: self.isAtTail ? "at-tail" : "off-tail",
+                        sequence: sequence,
+                        trigger: "post-layout-verification",
+                        textView: textView,
+                        reason: self.followsTail ? nil : "user-no-longer-following"
+                    )
+                }
+            }
         }
     }
 
@@ -195,20 +252,81 @@ final class TranslationResultScrollView: NSScrollView {
                     object: self,
                     queue: .main
                 ) { [weak self] _ in
-                    self?.updateTailFollowingFromUserScroll()
+                    self?.updateTailFollowingFromUserScroll(
+                        trigger: name == NSScrollView.didEndLiveScrollNotification
+                            ? "did-end-live-scroll"
+                            : "did-live-scroll",
+                        alwaysLog: name == NSScrollView.didEndLiveScrollNotification
+                    )
                 }
             )
         }
     }
 
-    private func updateTailFollowingFromUserScroll() {
+    private var isAtTail: Bool {
+        guard let documentView else { return true }
+        return max(0, documentView.bounds.maxY - documentView.visibleRect.maxY) <= 28
+    }
+
+    private func updateTailFollowingFromUserScroll(
+        trigger: String,
+        alwaysLog: Bool = false
+    ) {
+        let previousValue = followsTail
         guard let documentView else {
             followsTail = true
+            if alwaysLog || previousValue != followsTail {
+                recordTailEvent(
+                    "tail-follow-user-scroll",
+                    status: "no-document-view",
+                    sequence: tailScrollSequence,
+                    trigger: trigger
+                )
+            }
             return
         }
         let visibleRect = documentView.visibleRect
         let distanceFromBottom = max(0, documentView.bounds.maxY - visibleRect.maxY)
         followsTail = distanceFromBottom <= 28
+        if alwaysLog || previousValue != followsTail {
+            recordTailEvent(
+                "tail-follow-user-scroll",
+                status: previousValue == followsTail ? "unchanged" : "state-changed",
+                sequence: tailScrollSequence,
+                trigger: trigger
+            )
+        }
+    }
+
+    private func recordTailEvent(
+        _ stage: String,
+        status: String,
+        sequence: Int,
+        trigger: String,
+        textView: NSTextView? = nil,
+        reason: String? = nil
+    ) {
+        guard AppBuildMetadata.isDebugBuild else { return }
+        let documentView = self.documentView
+        let visibleRect = documentView?.visibleRect
+        let documentHeight = documentView?.bounds.height
+        let distanceFromBottom = documentView.flatMap { documentView in
+            visibleRect.map { max(0, documentView.bounds.maxY - $0.maxY) }
+        }
+        let resultText = textView?.string ?? (documentView as? NSTextView)?.string ?? ""
+        TranslationPerformanceDiagnostics.shared.recordTailFollowingEvent(
+            stage: stage,
+            status: status,
+            sequence: sequence,
+            trigger: trigger,
+            followsTail: followsTail,
+            resultUTF16: (resultText as NSString).length,
+            documentHeight: documentHeight.map(Double.init),
+            viewportHeight: visibleRect.map { Double($0.height) },
+            visibleMaxY: visibleRect.map { Double($0.maxY) },
+            distanceFromBottom: distanceFromBottom.map(Double.init),
+            reason: reason
+        )
     }
 }
 
