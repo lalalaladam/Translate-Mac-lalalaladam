@@ -6,33 +6,14 @@
 import Cocoa
 
 extension ViewController {
-    /// Keep streaming translation output pinned to the tail only while the
-    /// reader is already following it. Replacing NSTextView.string preserves
-    /// the clip view's old origin, so growing output otherwise disappears below
-    /// the viewport. A reader who has scrolled upward remains undisturbed.
+    /// Keep streaming translation output pinned to the tail unless the reader
+    /// has explicitly scrolled upward. The scroll view owns that user state so
+    /// text replacement and unrelated layout changes cannot disable following.
     func displayLongTextTranslationFollowingTail(_ translation: String) {
         guard let translationView = longTextTranslationView else { return }
-        let visibleRect = translationView.visibleRect
-        let distanceFromBottom = max(0, translationView.bounds.maxY - visibleRect.maxY)
-        let shouldFollowTail = distanceFromBottom <= 28
-
         translationView.string = translation
-        guard shouldFollowTail else { return }
-
-        DispatchQueue.main.async { [weak self, weak translationView] in
-            guard let self,
-                  let translationView,
-                  self.longTextTranslationView === translationView else {
-                return
-            }
-            if let layoutManager = translationView.layoutManager,
-               let textContainer = translationView.textContainer {
-                layoutManager.ensureLayout(for: textContainer)
-            }
-            translationView.scrollRangeToVisible(
-                NSRange(location: (translationView.string as NSString).length, length: 0)
-            )
-        }
+        (translationView.enclosingScrollView as? TranslationResultScrollView)?
+            .scrollToTailIfFollowing(translationView)
     }
 
     func activateInlineLongText(source: String) {
