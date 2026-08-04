@@ -167,9 +167,22 @@ final class TranslationResultScrollView: NSScrollView {
         updateTailFollowingFromUserScroll(trigger: "scroll-wheel")
     }
 
+    func beginTailFollowingSession(_ session: Int) {
+        let previousValue = followsTail
+        followsTail = true
+        recordTailEvent(
+            "tail-follow-session-reset",
+            status: previousValue == followsTail ? "unchanged" : "state-changed",
+            sequence: tailScrollSequence,
+            trigger: "translation-session",
+            reason: "session-\(session)"
+        )
+    }
+
     func scrollToTailIfFollowing(_ textView: NSTextView) {
         tailScrollSequence += 1
         let sequence = tailScrollSequence
+        reconcileTailFollowingWithGeometry(textView, sequence: sequence)
         guard followsTail else {
             recordTailEvent(
                 "tail-follow-scroll-skipped",
@@ -240,6 +253,28 @@ final class TranslationResultScrollView: NSScrollView {
                 }
             }
         }
+    }
+
+    private func reconcileTailFollowingWithGeometry(
+        _ textView: NSTextView,
+        sequence: Int
+    ) {
+        guard !followsTail else { return }
+        if let layoutManager = textView.layoutManager,
+           let textContainer = textView.textContainer {
+            layoutManager.ensureLayout(for: textContainer)
+        }
+        textView.layoutSubtreeIfNeeded()
+        guard !followsTail, isAtTail else { return }
+        followsTail = true
+        recordTailEvent(
+            "tail-follow-state-reconciled",
+            status: "state-changed",
+            sequence: sequence,
+            trigger: "result-update",
+            textView: textView,
+            reason: "geometry-at-tail"
+        )
     }
 
     private func installLiveScrollObservers() {
