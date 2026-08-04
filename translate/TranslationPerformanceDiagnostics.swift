@@ -240,6 +240,51 @@ final class TranslationPerformanceDiagnostics {
         }
     }
 
+    /// Debug-only, privacy-safe snapshots for diagnosing result-pane tail
+    /// following. Text content is never recorded; only lengths and geometry.
+    func recordTailFollowingEvent(
+        stage: String,
+        status: String,
+        sequence: Int,
+        trigger: String,
+        followsTail: Bool?,
+        resultUTF16: Int,
+        documentHeight: Double? = nil,
+        viewportHeight: Double? = nil,
+        visibleMaxY: Double? = nil,
+        distanceFromBottom: Double? = nil,
+        reason: String? = nil
+    ) {
+        guard AppBuildMetadata.isDebugBuild else { return }
+        queue.async { [self] in
+            var record: [String: Any] = [
+                "timestamp": Self.timestamp(),
+                "run_id": runID,
+                "request_id": 0,
+                "level": 2,
+                "stage": stage,
+                "elapsed_ms": 0.0,
+                "stage_ms": 0.0,
+                "text_chars": 0,
+                "text_utf16": resultUTF16,
+                "direction": "result-tail",
+                "status": status,
+                "sequence": sequence,
+                "trigger": trigger
+            ]
+            if let followsTail { record["follows_tail"] = followsTail }
+            if let documentHeight { record["document_height"] = documentHeight }
+            if let viewportHeight { record["viewport_height"] = viewportHeight }
+            if let visibleMaxY { record["visible_max_y"] = visibleMaxY }
+            if let distanceFromBottom {
+                record["distance_from_bottom"] = distanceFromBottom
+            }
+            if let reason { record["reason"] = reason }
+            record.merge(AppBuildMetadata.logFields) { _, new in new }
+            appendRecord(record)
+        }
+    }
+
     func finish(requestID: Int, stage: String, status: String) {
         guard requestID > 0 else { return }
         let now = CACurrentMediaTime()
