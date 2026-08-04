@@ -387,7 +387,9 @@ extension ViewController {
     }
 
     func makeLongTextScrollView(with textView: NSTextView) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView: NSScrollView = textView is TranslationResultTextView
+            ? TranslationResultScrollView(frame: .zero)
+            : NSScrollView()
         // Let the parent vibrancy material remain visible in both light and
         // dark mode. The standard bezel draws an opaque white background.
         scrollView.borderType = .noBorder

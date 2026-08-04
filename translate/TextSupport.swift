@@ -140,6 +140,78 @@ final class TranslationSourceTextView: AlignmentTextView {
 
 final class TranslationResultTextView: AlignmentTextView {}
 
+/// Remembers whether the reader is following the end of the translated text.
+/// Only live user scrolling changes this state; text replacement and layout
+/// changes must never be mistaken for an intentional scroll away from the end.
+final class TranslationResultScrollView: NSScrollView {
+    private(set) var followsTail = true
+    private var liveScrollObservers: [NSObjectProtocol] = []
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        installLiveScrollObservers()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        installLiveScrollObservers()
+    }
+
+    deinit {
+        liveScrollObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        super.scrollWheel(with: event)
+        updateTailFollowingFromUserScroll()
+    }
+
+    func scrollToTailIfFollowing(_ textView: NSTextView) {
+        guard followsTail else { return }
+        DispatchQueue.main.async { [weak self, weak textView] in
+            guard let self,
+                  self.followsTail,
+                  let textView,
+                  textView.enclosingScrollView === self else {
+                return
+            }
+            if let layoutManager = textView.layoutManager,
+               let textContainer = textView.textContainer {
+                layoutManager.ensureLayout(for: textContainer)
+            }
+            textView.scrollRangeToVisible(
+                NSRange(location: (textView.string as NSString).length, length: 0)
+            )
+        }
+    }
+
+    private func installLiveScrollObservers() {
+        let center = NotificationCenter.default
+        for name in [NSScrollView.didLiveScrollNotification,
+                     NSScrollView.didEndLiveScrollNotification] {
+            liveScrollObservers.append(
+                center.addObserver(
+                    forName: name,
+                    object: self,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.updateTailFollowingFromUserScroll()
+                }
+            )
+        }
+    }
+
+    private func updateTailFollowingFromUserScroll() {
+        guard let documentView else {
+            followsTail = true
+            return
+        }
+        let visibleRect = documentView.visibleRect
+        let distanceFromBottom = max(0, documentView.bounds.maxY - visibleRect.maxY)
+        followsTail = distanceFromBottom <= 28
+    }
+}
+
 enum TranslationServiceTextNormalizer {
     private static let citationSuperscriptExpression = try? NSRegularExpression(
         pattern: #"(?i)<sup(?:\s+[^<>]*)?>([0-9\s,;\-–—]+)</sup\s*>"#
