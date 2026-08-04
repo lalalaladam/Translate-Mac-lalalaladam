@@ -305,7 +305,7 @@ extension ViewController {
         }
 
         translationCoordinator.provisionalFallbackPreviewDisplayed = true
-        longTextTranslationView?.string = translation
+        displayLongTextTranslationFollowingTail(translation)
         logFirstVisibleTranslationIfNeeded(provider: .api)
         logTranslationTiming("api-provisional-preview-displayed")
         updateInlineLongText(
@@ -361,7 +361,7 @@ extension ViewController {
         }
         translationCoordinator.webDeadline = nil
         translationResultProviders.insert(provider)
-        longTextTranslationView?.string = longTextTranslation
+        displayLongTextTranslationFollowingTail(longTextTranslation)
         logFirstVisibleTranslationIfNeeded(provider: provider)
         if translationTimingRequest?.didLogFinalDisplay == false {
             translationTimingRequest?.didLogFinalDisplay = true
