@@ -7,8 +7,98 @@ import Cocoa
 import WebKit
 
 extension ViewController {
+    func resetPrimaryWebWarmupForNavigation() {
+        primaryWebWarmupTimeoutWorkItem?.cancel()
+        primaryWebWarmupTimeoutWorkItem = nil
+        primaryWebWarmupGeneration += 1
+        primaryWebWarmupState = .idle
+    }
+
+    func scheduleIdleSecondaryWebViewWarmups(after delay: TimeInterval) {
+        secondaryWebViewWarmupWorkItem?.cancel()
+        let source = currentSourceLanguage
+        let target = currentTargetLanguage
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.isReady,
+                  self.currentSourceLanguage == source,
+                  self.currentTargetLanguage == target,
+                  self.longTextSourceView?.string
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
+                return
+            }
+            self.secondaryWebViewWarmupWorkItem = nil
+            if source == .automatic {
+                self.loadAutomaticTranslationService(target: target)
+            }
+            self.warmStandbyTranslationServiceForReverseDirection()
+        }
+        secondaryWebViewWarmupWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    func schedulePostTranslationWebViewWarmups(after delay: TimeInterval) {
+        secondaryWebViewWarmupWorkItem?.cancel()
+        let source = currentSourceLanguage
+        let target = currentTargetLanguage
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.isReady,
+                  self.currentSourceLanguage == source,
+                  self.currentTargetLanguage == target,
+                  self.longTextStatusState == .completed,
+                  self.translationCoordinator.debounceWorkItem == nil,
+                  !self.languageSwapInProgress else { return }
+            self.secondaryWebViewWarmupWorkItem = nil
+            self.warmStandbyTranslationServiceForReverseDirection()
+            self.warmParallelTranslationService(source: source, target: target)
+        }
+        secondaryWebViewWarmupWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    func cancelCompetingSecondaryWebViewLoads(
+        source: TranslateLanguage,
+        target: TranslateLanguage
+    ) {
+        secondaryWebViewWarmupWorkItem?.cancel()
+        secondaryWebViewWarmupWorkItem = nil
+        var stoppedServices: [String] = []
+
+        if automaticTranslationWebViewLoading, source != .automatic {
+            automaticTranslationWebView.stopLoading()
+            automaticTranslationWebViewLoading = false
+            automaticTranslationWebViewReady = false
+            stoppedServices.append("automatic")
+        }
+        let needsLoadingStandby = standbyTranslationWebViewLoading &&
+            standbyTranslationSource == source && standbyTranslationTarget == target
+        if standbyTranslationWebViewLoading, !needsLoadingStandby {
+            standbyTranslationWebView.stopLoading()
+            standbyTranslationWebViewLoading = false
+            standbyTranslationWebViewReady = false
+            stoppedServices.append("standby")
+        }
+        if parallelTranslationWebViewLoading {
+            parallelTranslationWebView.stopLoading()
+            parallelTranslationWebViewLoading = false
+            parallelTranslationWebViewReady = false
+            stoppedServices.append("parallel")
+        }
+        if !stoppedServices.isEmpty {
+            logTranslationCoordinator(
+                "secondary-webview-loads-preempted-\(stoppedServices.joined(separator: "-"))",
+                source: ""
+            )
+        }
+    }
+
     func showConnectionOverlay(waitingForNetwork: Bool) {
         connectionOverlay?.isHidden = false
+        longTextSourceView?.isEditable = false
+        workspaceSourceLanguageButton?.isEnabled = false
+        workspaceTargetLanguageButton?.isEnabled = false
+        workspaceSwapButton?.isEnabled = false
         connectionRetryButton?.title = interfaceText("立即重试", "Retry Now")
 
         if waitingForNetwork {
@@ -41,6 +131,10 @@ extension ViewController {
         delayedConnectionOverlayWorkItem = nil
         connectionOverlay?.isHidden = true
         connectionSpinner?.stopAnimation(nil)
+        longTextSourceView?.isEditable = true
+        workspaceSourceLanguageButton?.isEnabled = true
+        workspaceTargetLanguageButton?.isEnabled = true
+        workspaceSwapButton?.isEnabled = true
     }
 
     func scheduleConnectionOverlayIfStillLoading(attempt: Int) {
@@ -58,6 +152,7 @@ extension ViewController {
     }
 
     func loadTranslationService() {
+        resetPrimaryWebWarmupForNavigation()
         automaticRetryWorkItem?.cancel()
         loadTimeoutWorkItem?.cancel()
         translationLoadAttempt += 1
@@ -69,8 +164,7 @@ extension ViewController {
         webView.isHidden = false
         webView.alphaValue = backgroundTranslationWebViewAlpha
         isReady = false
-        hideConnectionOverlay()
-        scheduleConnectionOverlayIfStillLoading(attempt: attempt)
+        showConnectionOverlay(waitingForNetwork: true)
         logStartupTiming("Primary page load started")
         webView.load(
             URLRequest(
@@ -262,24 +356,20 @@ extension ViewController {
         restoreSourceFocusAfterLanguageSwapIfNeeded()
         loadTimeoutWorkItem?.cancel()
         automaticRetryWorkItem?.cancel()
-        hideConnectionOverlay()
 
-        // Do not let reverse-page warming compete with the first translation.
-        // By the time this fires, an immediate cold-start request has normally
-        // produced its first result; the standby remains ready for a later swap.
-        let readySourceLanguage = currentSourceLanguage
-        let readyTargetLanguage = currentTargetLanguage
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self,
-                  self.currentSourceLanguage == readySourceLanguage,
-                  self.currentTargetLanguage == readyTargetLanguage else {
-                return
-            }
-            self.warmStandbyTranslationServiceForReverseDirection()
-            self.warmParallelTranslationService(
-                source: readySourceLanguage,
-                target: readyTargetLanguage
-            )
+        let hasVisibleSource = longTextSourceView?.string
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty == false
+        if !hadPendingPrimaryRequest,
+           !languageSwapInProgress,
+           !hasVisibleSource,
+           startPrimaryWebWarmupIfPossible() {
+            return
+        } else {
+            hideConnectionOverlay()
+            // Preserve the existing first-request recovery capacity when the
+            // user submits before DOM readiness: the real request owns all
+            // WebKit and network capacity until it produces a result.
         }
     }
 
@@ -344,7 +434,9 @@ extension ViewController {
     }
 
     func applyCurrentLanguagesPreservingSource() {
-        loadAutomaticTranslationService(target: currentTargetLanguage)
+        if currentSourceLanguage == .automatic {
+            loadAutomaticTranslationService(target: currentTargetLanguage)
+        }
         if promoteStandbyTranslationServiceIfReady(
             source: currentSourceLanguage,
             target: currentTargetLanguage
@@ -391,6 +483,7 @@ extension ViewController {
         let target = currentTargetLanguage
         let workItem = DispatchWorkItem { [weak self] in
             guard let self,
+                  self.currentSourceLanguage == .automatic,
                   self.currentTargetLanguage == target,
                   self.longTextStatusState == .completed,
                   self.translationCoordinator.debounceWorkItem == nil,
@@ -541,6 +634,7 @@ extension ViewController {
     }
 
     func reloadPreservingSource(for destination: ReloadDestination) {
+        resetPrimaryWebWarmupForNavigation()
         reloadRequestGeneration += 1
         let generation = reloadRequestGeneration
 

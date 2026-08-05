@@ -49,6 +49,14 @@ extension ViewController: WKScriptMessageHandler {
                 return
             }
 
+            if action == "translationServiceWarmupFinished",
+               let generation = (payload["generation"] as? NSNumber)?.intValue,
+               let status = payload["status"] as? String,
+               ["ready", "timeout"].contains(status) {
+                finishPrimaryWebWarmup(generation: generation, status: status)
+                return
+            }
+
             if action == "copySource", let text = payload["text"] as? String {
                 copyToPasteboard(longTextSource ?? text)
                 return

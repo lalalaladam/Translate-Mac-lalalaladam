@@ -71,6 +71,12 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         case translation
     }
 
+    enum PrimaryWebWarmupState: Equatable {
+        case idle
+        case running
+        case finished
+    }
+
     public var isReady = false
     private var readyHandlers: [() -> Void] = []
 
@@ -139,6 +145,10 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var delayedConnectionOverlayWorkItem: DispatchWorkItem?
     var automaticRetryWorkItem: DispatchWorkItem?
     var automaticTranslationWarmupWorkItem: DispatchWorkItem?
+    var secondaryWebViewWarmupWorkItem: DispatchWorkItem?
+    var primaryWebWarmupState: PrimaryWebWarmupState = .idle
+    var primaryWebWarmupGeneration = 0
+    var primaryWebWarmupTimeoutWorkItem: DispatchWorkItem?
     var translationLoadAttempt = 0
     // The workspace is intentionally a transparent content layer. The main
     // window already owns the single behind-window glass effect used by the
@@ -251,6 +261,8 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         delayedConnectionOverlayWorkItem?.cancel()
         automaticRetryWorkItem?.cancel()
         automaticTranslationWarmupWorkItem?.cancel()
+        secondaryWebViewWarmupWorkItem?.cancel()
+        primaryWebWarmupTimeoutWorkItem?.cancel()
         translationCoordinator.debounceWorkItem?.cancel()
         stopSpeaking()
     }
