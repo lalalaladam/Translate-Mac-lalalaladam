@@ -146,6 +146,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var automaticRetryWorkItem: DispatchWorkItem?
     var automaticTranslationWarmupWorkItem: DispatchWorkItem?
     var secondaryWebViewWarmupWorkItem: DispatchWorkItem?
+    var parallelWebViewWarmupWorkItem: DispatchWorkItem?
     var primaryWebWarmupState: PrimaryWebWarmupState = .idle
     var primaryWebWarmupGeneration = 0
     var primaryWebWarmupTimeoutWorkItem: DispatchWorkItem?
@@ -262,6 +263,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         automaticRetryWorkItem?.cancel()
         automaticTranslationWarmupWorkItem?.cancel()
         secondaryWebViewWarmupWorkItem?.cancel()
+        parallelWebViewWarmupWorkItem?.cancel()
         primaryWebWarmupTimeoutWorkItem?.cancel()
         translationCoordinator.debounceWorkItem?.cancel()
         stopSpeaking()

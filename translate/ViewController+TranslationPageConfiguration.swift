@@ -154,7 +154,10 @@ extension ViewController {
         primaryWebWarmupState = .finished
         logTranslationCoordinator("primary-web-warmup-\(status)", source: "")
         hideConnectionOverlay()
-        scheduleIdleSecondaryWebViewWarmups(after: 0.8)
+        // The primary request path is now proven healthy. Start only the one
+        // secondary page most likely to be needed next; parallel same-direction
+        // capacity remains deferred until a real translation has completed.
+        scheduleIdleSecondaryWebViewWarmups(after: 0)
     }
 
     func cancelPrimaryWebWarmupForUserRequest() {
