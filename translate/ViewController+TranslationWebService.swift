@@ -10,6 +10,10 @@ extension ViewController {
     func resetPrimaryWebWarmupForNavigation() {
         primaryWebWarmupTimeoutWorkItem?.cancel()
         primaryWebWarmupTimeoutWorkItem = nil
+        secondaryWebViewWarmupWorkItem?.cancel()
+        secondaryWebViewWarmupWorkItem = nil
+        parallelWebViewWarmupWorkItem?.cancel()
+        parallelWebViewWarmupWorkItem = nil
         primaryWebWarmupGeneration += 1
         primaryWebWarmupState = .idle
     }
@@ -29,9 +33,18 @@ extension ViewController {
             }
             self.secondaryWebViewWarmupWorkItem = nil
             if source == .automatic {
+                self.logTranslationCoordinator(
+                    "idle-secondary-warmup-started-automatic",
+                    source: ""
+                )
                 self.loadAutomaticTranslationService(target: target)
+            } else {
+                self.logTranslationCoordinator(
+                    "idle-secondary-warmup-started-standby",
+                    source: ""
+                )
+                self.warmStandbyTranslationServiceForReverseDirection()
             }
-            self.warmStandbyTranslationServiceForReverseDirection()
         }
         secondaryWebViewWarmupWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
@@ -39,6 +52,8 @@ extension ViewController {
 
     func schedulePostTranslationWebViewWarmups(after delay: TimeInterval) {
         secondaryWebViewWarmupWorkItem?.cancel()
+        parallelWebViewWarmupWorkItem?.cancel()
+        parallelWebViewWarmupWorkItem = nil
         let source = currentSourceLanguage
         let target = currentTargetLanguage
         let workItem = DispatchWorkItem { [weak self] in
@@ -50,10 +65,46 @@ extension ViewController {
                   self.translationCoordinator.debounceWorkItem == nil,
                   !self.languageSwapInProgress else { return }
             self.secondaryWebViewWarmupWorkItem = nil
-            self.warmStandbyTranslationServiceForReverseDirection()
-            self.warmParallelTranslationService(source: source, target: target)
+            // Automatic owns its separately cancellable immediate warmup.
+            // Explicit pairs use this slot for the reverse standby page.
+            if source != .automatic {
+                self.logTranslationCoordinator(
+                    "post-translation-secondary-warmup-started-standby",
+                    source: ""
+                )
+                self.warmStandbyTranslationServiceForReverseDirection()
+            }
+            self.scheduleParallelWebViewWarmup(
+                source: source,
+                target: target,
+                after: 0.8
+            )
         }
         secondaryWebViewWarmupWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    func scheduleParallelWebViewWarmup(
+        source: TranslateLanguage,
+        target: TranslateLanguage,
+        after delay: TimeInterval
+    ) {
+        parallelWebViewWarmupWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.currentSourceLanguage == source,
+                  self.currentTargetLanguage == target,
+                  self.longTextStatusState == .completed,
+                  self.translationCoordinator.debounceWorkItem == nil,
+                  !self.languageSwapInProgress else { return }
+            self.parallelWebViewWarmupWorkItem = nil
+            self.logTranslationCoordinator(
+                "post-translation-parallel-warmup-started",
+                source: ""
+            )
+            self.warmParallelTranslationService(source: source, target: target)
+        }
+        parallelWebViewWarmupWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
@@ -63,6 +114,8 @@ extension ViewController {
     ) {
         secondaryWebViewWarmupWorkItem?.cancel()
         secondaryWebViewWarmupWorkItem = nil
+        parallelWebViewWarmupWorkItem?.cancel()
+        parallelWebViewWarmupWorkItem = nil
         var stoppedServices: [String] = []
 
         if automaticTranslationWebViewLoading, source != .automatic {
@@ -79,7 +132,9 @@ extension ViewController {
             standbyTranslationWebViewReady = false
             stoppedServices.append("standby")
         }
-        if parallelTranslationWebViewLoading {
+        let needsLoadingParallel = parallelTranslationWebViewLoading &&
+            parallelTranslationSource == source && parallelTranslationTarget == target
+        if parallelTranslationWebViewLoading, !needsLoadingParallel {
             parallelTranslationWebView.stopLoading()
             parallelTranslationWebViewLoading = false
             parallelTranslationWebViewReady = false
@@ -495,9 +550,9 @@ extension ViewController {
             self.loadAutomaticTranslationService(target: target)
         }
         automaticTranslationWarmupWorkItem = workItem
-        // Keep navigation completely outside the typing and result-display
-        // paths. A later input cancels this work item before it can fire.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: workItem)
+        // The real translation is already complete, so warming the only
+        // high-value alternate page now cannot delay its first visible result.
+        DispatchQueue.main.async(execute: workItem)
     }
 
     func warmParallelTranslationService(
