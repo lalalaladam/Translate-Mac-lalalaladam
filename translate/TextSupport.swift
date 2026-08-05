@@ -147,6 +147,10 @@ final class TranslationResultScrollView: NSScrollView {
     private(set) var followsTail = true
     private var liveScrollObservers: [NSObjectProtocol] = []
     private var tailScrollSequence = 0
+    private var tailSession = 0
+    private var tailRequestID = 0
+    private var lastAppliedLogSession = 0
+    private var lastVerifiedAtTailLogSession = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -167,14 +171,17 @@ final class TranslationResultScrollView: NSScrollView {
         updateTailFollowingFromUserScroll(trigger: "scroll-wheel")
     }
 
-    func beginTailFollowingSession(_ session: Int) {
+    func beginTailFollowingSession(_ session: Int, requestID: Int) {
         let previousValue = followsTail
+        tailSession = session
+        tailRequestID = requestID
         followsTail = true
         recordTailEvent(
             "tail-follow-session-reset",
             status: previousValue == followsTail ? "unchanged" : "state-changed",
             sequence: tailScrollSequence,
             trigger: "translation-session",
+            previousFollowsTail: previousValue,
             reason: "session-\(session)"
         )
     }
@@ -182,6 +189,8 @@ final class TranslationResultScrollView: NSScrollView {
     func scrollToTailIfFollowing(_ textView: NSTextView) {
         tailScrollSequence += 1
         let sequence = tailScrollSequence
+        let scheduledSession = tailSession
+        let scheduledResultUTF16 = (textView.string as NSString).length
         reconcileTailFollowingWithGeometry(textView, sequence: sequence)
         guard followsTail else {
             recordTailEvent(
@@ -194,15 +203,9 @@ final class TranslationResultScrollView: NSScrollView {
             )
             return
         }
-        recordTailEvent(
-            "tail-follow-scroll-scheduled",
-            status: "scheduled",
-            sequence: sequence,
-            trigger: "result-update",
-            textView: textView
-        )
         DispatchQueue.main.async { [weak self, weak textView] in
             guard let self, let textView else { return }
+            guard self.tailSession == scheduledSession else { return }
             guard self.followsTail else {
                 self.recordTailEvent(
                     "tail-follow-scroll-aborted",
@@ -232,22 +235,36 @@ final class TranslationResultScrollView: NSScrollView {
             textView.scrollRangeToVisible(
                 NSRange(location: (textView.string as NSString).length, length: 0)
             )
-            self.recordTailEvent(
-                "tail-follow-scroll-applied",
-                status: "applied",
-                sequence: sequence,
-                trigger: "async-execution",
-                textView: textView
-            )
+            if self.lastAppliedLogSession != self.tailSession {
+                self.lastAppliedLogSession = self.tailSession
+                self.recordTailEvent(
+                    "tail-follow-scroll-applied",
+                    status: "applied",
+                    sequence: sequence,
+                    trigger: "async-execution",
+                    textView: textView,
+                    scheduledResultUTF16: scheduledResultUTF16
+                )
+            }
             if AppBuildMetadata.isDebugBuild {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak textView] in
                     guard let self, let textView else { return }
+                    guard self.tailSession == scheduledSession else { return }
+                    let isAtTail = self.isAtTail
+                    guard !isAtTail ||
+                            self.lastVerifiedAtTailLogSession != self.tailSession else {
+                        return
+                    }
+                    if isAtTail {
+                        self.lastVerifiedAtTailLogSession = self.tailSession
+                    }
                     self.recordTailEvent(
                         "tail-follow-scroll-verified",
-                        status: self.isAtTail ? "at-tail" : "off-tail",
+                        status: isAtTail ? "at-tail" : "off-tail",
                         sequence: sequence,
                         trigger: "post-layout-verification",
                         textView: textView,
+                        scheduledResultUTF16: scheduledResultUTF16,
                         reason: self.followsTail ? nil : "user-no-longer-following"
                     )
                 }
@@ -290,8 +307,7 @@ final class TranslationResultScrollView: NSScrollView {
                     self?.updateTailFollowingFromUserScroll(
                         trigger: name == NSScrollView.didEndLiveScrollNotification
                             ? "did-end-live-scroll"
-                            : "did-live-scroll",
-                        alwaysLog: name == NSScrollView.didEndLiveScrollNotification
+                            : "did-live-scroll"
                     )
                 }
             )
@@ -304,18 +320,18 @@ final class TranslationResultScrollView: NSScrollView {
     }
 
     private func updateTailFollowingFromUserScroll(
-        trigger: String,
-        alwaysLog: Bool = false
+        trigger: String
     ) {
         let previousValue = followsTail
         guard let documentView else {
             followsTail = true
-            if alwaysLog || previousValue != followsTail {
+            if previousValue != followsTail {
                 recordTailEvent(
                     "tail-follow-user-scroll",
                     status: "no-document-view",
                     sequence: tailScrollSequence,
-                    trigger: trigger
+                    trigger: trigger,
+                    previousFollowsTail: previousValue
                 )
             }
             return
@@ -323,12 +339,13 @@ final class TranslationResultScrollView: NSScrollView {
         let visibleRect = documentView.visibleRect
         let distanceFromBottom = max(0, documentView.bounds.maxY - visibleRect.maxY)
         followsTail = distanceFromBottom <= 28
-        if alwaysLog || previousValue != followsTail {
+        if previousValue != followsTail {
             recordTailEvent(
                 "tail-follow-user-scroll",
                 status: previousValue == followsTail ? "unchanged" : "state-changed",
                 sequence: tailScrollSequence,
-                trigger: trigger
+                trigger: trigger,
+                previousFollowsTail: previousValue
             )
         }
     }
@@ -339,6 +356,8 @@ final class TranslationResultScrollView: NSScrollView {
         sequence: Int,
         trigger: String,
         textView: NSTextView? = nil,
+        previousFollowsTail: Bool? = nil,
+        scheduledResultUTF16: Int? = nil,
         reason: String? = nil
     ) {
         guard AppBuildMetadata.isDebugBuild else { return }
@@ -352,10 +371,14 @@ final class TranslationResultScrollView: NSScrollView {
         TranslationPerformanceDiagnostics.shared.recordTailFollowingEvent(
             stage: stage,
             status: status,
+            requestID: tailRequestID,
+            session: tailSession,
             sequence: sequence,
             trigger: trigger,
             followsTail: followsTail,
+            previousFollowsTail: previousFollowsTail,
             resultUTF16: (resultText as NSString).length,
+            scheduledResultUTF16: scheduledResultUTF16,
             documentHeight: documentHeight.map(Double.init),
             viewportHeight: visibleRect.map { Double($0.height) },
             visibleMaxY: visibleRect.map { Double($0.maxY) },

@@ -63,19 +63,7 @@ extension ViewController {
         let previousActivity = translationWebViewLastActivityAt[key]
         translationWebViewLastActivityAt[key] = now
 
-        let role: String
-        if webView === automaticTranslationWebView {
-            role = "automatic"
-        } else if webView === parallelTranslationWebView {
-            role = "parallel"
-        } else if webView === standbyTranslationWebView {
-            role = "standby"
-        } else if webView === self.webView {
-            role = "primary"
-        } else {
-            role = "unknown"
-        }
-
+        let role = translationWebViewRole(webView)
         var fields: [String: Any] = [
             "webview_role": role,
             "service_activity_known": previousActivity != nil
@@ -87,6 +75,47 @@ extension ViewController {
             )
         }
         logTranslationTiming(stage, diagnosticFields: fields)
+    }
+
+    func translationWebViewRole(_ webView: WKWebView) -> String {
+        if webView === automaticTranslationWebView {
+            return "automatic"
+        } else if webView === parallelTranslationWebView {
+            return "parallel"
+        } else if webView === standbyTranslationWebView {
+            return "standby"
+        } else if webView === self.webView {
+            return "primary"
+        }
+        return "unknown"
+    }
+
+    func logWebResultRejection(
+        in webView: WKWebView,
+        reason: String,
+        observedSourceMatches: Bool,
+        blockedByPreviousResult: Bool,
+        extractedUTF16: Int,
+        mutationCount: Int,
+        webTimingFields: [String: Any]
+    ) {
+        let role = translationWebViewRole(webView)
+        let rejection = translationCoordinator.recordWebResultRejection(
+            role: role,
+            reason: reason
+        )
+        guard rejection.isFirst else { return }
+        var fields: [String: Any] = [
+            "webview_role": role,
+            "rejection_reason": reason,
+            "rejection_count": rejection.count,
+            "observed_source_matches": observedSourceMatches,
+            "blocked_by_previous_result": blockedByPreviousResult,
+            "extracted_result_utf16": extractedUTF16,
+            "result_mutation_count": mutationCount
+        ]
+        webTimingFields.forEach { fields[$0.key] = $0.value }
+        logTranslationTiming("web-result-rejected", diagnosticFields: fields)
     }
 
     func logTranslationTiming(

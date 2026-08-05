@@ -31,6 +31,7 @@ final class TranslationServiceCoordinator {
         let translation: String
         let separator: String
         let replacesVisibleTranslation: Bool
+        let usedAPI: Bool
     }
 
     var completedSource = ""
@@ -48,6 +49,8 @@ final class TranslationServiceCoordinator {
     var concurrentAPITasks: [Int: URLSessionDataTask] = [:]
     var concurrentAPIResults: [Int: String] = [:]
     var concurrentAPIRetryCounts: [Int: Int] = [:]
+    var concurrentAPIWebResultIndexes: Set<Int> = []
+    var concurrentAPIBatchStarted = false
 
     var session = 0
     var pollAttempts = 0
@@ -67,6 +70,7 @@ final class TranslationServiceCoordinator {
     var fallbackShouldFinalize = false
     var lastWebActivityAt: Date?
     var coldResumeHedgeActive = false
+    private var webResultRejectionCounts: [String: Int] = [:]
 
     var debounceWorkItem: DispatchWorkItem?
     var fallbackTask: URLSessionDataTask?
@@ -88,10 +92,13 @@ final class TranslationServiceCoordinator {
         usesConcurrentAPIBatch = newChunks.count >= concurrentAPIChunkThreshold
         concurrentAPIResults.removeAll(keepingCapacity: true)
         concurrentAPIRetryCounts.removeAll(keepingCapacity: true)
+        concurrentAPIWebResultIndexes.removeAll(keepingCapacity: true)
+        concurrentAPIBatchStarted = false
         pollAttempts = 0
         lastWebTranslation = nil
         candidateTranslation = nil
         candidateUpdatedAt = nil
+        webResultRejectionCounts.removeAll(keepingCapacity: true)
         scheduledPoll?.cancel()
         scheduledPoll = nil
         pollInFlightSession = nil
@@ -121,11 +128,14 @@ final class TranslationServiceCoordinator {
         coldResumeHedgeActive = false
         candidateTranslation = nil
         candidateUpdatedAt = nil
+        webResultRejectionCounts.removeAll(keepingCapacity: true)
         chunks.removeAll(keepingCapacity: true)
         chunkIndex = 0
         usesConcurrentAPIBatch = false
         concurrentAPIResults.removeAll(keepingCapacity: true)
         concurrentAPIRetryCounts.removeAll(keepingCapacity: true)
+        concurrentAPIWebResultIndexes.removeAll(keepingCapacity: true)
+        concurrentAPIBatchStarted = false
 
         scheduledPoll?.cancel()
         scheduledPoll = nil
@@ -165,6 +175,7 @@ final class TranslationServiceCoordinator {
         } ?? false
         candidateTranslation = nil
         candidateUpdatedAt = nil
+        webResultRejectionCounts.removeAll(keepingCapacity: true)
         return idleDuration
     }
 
@@ -188,12 +199,16 @@ final class TranslationServiceCoordinator {
         candidateUpdatedAt = nil
     }
 
-    func enableConcurrentAPIFallback() {
+    func enableConcurrentAPIFallback(
+        reusingWebResults: [Int: String] = [:]
+    ) {
         usesConcurrentAPIBatch = true
         concurrentAPITasks.values.forEach { $0.cancel() }
         concurrentAPITasks.removeAll(keepingCapacity: true)
-        concurrentAPIResults.removeAll(keepingCapacity: true)
+        concurrentAPIResults = reusingWebResults
         concurrentAPIRetryCounts.removeAll(keepingCapacity: true)
+        concurrentAPIWebResultIndexes = Set(reusingWebResults.keys)
+        concurrentAPIBatchStarted = false
     }
 
     func clearAfterEmptyInput() {
@@ -204,6 +219,8 @@ final class TranslationServiceCoordinator {
         concurrentAPITasks.removeAll(keepingCapacity: true)
         concurrentAPIResults.removeAll(keepingCapacity: true)
         concurrentAPIRetryCounts.removeAll(keepingCapacity: true)
+        concurrentAPIWebResultIndexes.removeAll(keepingCapacity: true)
+        concurrentAPIBatchStarted = false
         pollAttempts = 0
         lastWebTranslation = nil
         scheduledPoll?.cancel()
@@ -243,6 +260,19 @@ final class TranslationServiceCoordinator {
         return true
     }
 
+    func recordWebResultRejection(role: String, reason: String) -> (count: Int, isFirst: Bool) {
+        let key = "\(role)_\(reason)"
+        let count = webResultRejectionCounts[key, default: 0] + 1
+        webResultRejectionCounts[key] = count
+        return (count, count == 1)
+    }
+
+    var webResultRejectionSummaryFields: [String: Any] {
+        webResultRejectionCounts.reduce(into: [:]) { fields, item in
+            fields["web_rejection_\(item.key)_count"] = item.value
+        }
+    }
+
     @discardableResult
     func startConcurrentAPIBatch(
         session expectedSession: Int,
@@ -255,14 +285,16 @@ final class TranslationServiceCoordinator {
     ) -> Bool {
         guard expectedSession == session,
               usesConcurrentAPIBatch,
-              concurrentAPITasks.isEmpty,
-              concurrentAPIResults.isEmpty else {
+              !concurrentAPIBatchStarted else {
             return false
         }
 
+        concurrentAPIBatchStarted = true
         onStarted()
         for (index, chunk) in chunks.enumerated() {
-            if chunk.text.isEmpty {
+            if concurrentAPIResults[index] != nil {
+                continue
+            } else if chunk.text.isEmpty {
                 concurrentAPIResults[index] = ""
             } else {
                 requestConcurrentAPIChunk(
@@ -380,7 +412,8 @@ final class TranslationServiceCoordinator {
             orderedResults.append(OrderedConcurrentResult(
                 translation: translation,
                 separator: separator,
-                replacesVisibleTranslation: replacesResult
+                replacesVisibleTranslation: replacesResult,
+                usedAPI: concurrentAPIWebResultIndexes.remove(chunkIndex) == nil
             ))
             chunkIndex += 1
         }

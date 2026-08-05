@@ -16,6 +16,8 @@ extension ViewController {
             TranslationPerformanceDiagnostics.shared.recordTailFollowingEvent(
                 stage: "tail-follow-scroll-unavailable",
                 status: "unexpected-scroll-view",
+                requestID: translationTimingRequest?.id ?? 0,
+                session: translationCoordinator.session,
                 sequence: 0,
                 trigger: "result-update",
                 followsTail: nil,
