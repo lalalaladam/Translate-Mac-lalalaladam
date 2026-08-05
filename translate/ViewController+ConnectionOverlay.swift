@@ -70,7 +70,10 @@ extension ViewController {
         connectionDetailLabel = detail
         connectionSpinner = spinner
         connectionRetryButton = retryButton
-        hideConnectionOverlay()
+        // The service load starts later in this same view lifecycle. Keep the
+        // cover visible from the first rendered frame so the editor can never
+        // appear interactive before WebKit and its warmup are ready.
+        showConnectionOverlay(waitingForNetwork: true)
     }
 
 }

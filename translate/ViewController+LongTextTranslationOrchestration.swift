@@ -87,10 +87,7 @@ extension ViewController {
             updateInlineLongText(source: nil, translation: longTextTranslation, status: status)
             updateLongTextLabels()
             scheduleAutomaticTranslationServiceWarmup()
-            warmParallelTranslationService(
-                source: TranslateLanguage(rawValue: longTextSourceLanguage) ?? .automatic,
-                target: TranslateLanguage(rawValue: longTextTargetLanguage) ?? .simplifiedChinese
-            )
+            schedulePostTranslationWebViewWarmups(after: 0.35)
             return
         }
 

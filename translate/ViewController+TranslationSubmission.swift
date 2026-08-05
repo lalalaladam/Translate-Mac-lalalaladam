@@ -27,6 +27,7 @@ extension ViewController {
             clearLongTextTranslationForEmptyInput()
             return
         }
+        cancelPrimaryWebWarmupForUserRequest()
         startTranslationTimingRequest(source: source, session: translationCoordinator.session)
         logTranslationTiming("swift-begin-translation")
         if !didLogFirstTranslationCommand {
@@ -39,6 +40,10 @@ extension ViewController {
             selectedLanguage: currentSourceLanguage
         )
         let targetLanguage = currentTargetLanguage
+        cancelCompetingSecondaryWebViewLoads(
+            source: effectiveSourceLanguage,
+            target: targetLanguage
+        )
         if effectiveSourceLanguage == .automatic {
             pendingPrimaryTranslationSource = nil
             pendingPrimaryTranslationSession = nil
@@ -361,6 +366,14 @@ extension ViewController {
             clearLongTextTranslationForEmptyInput()
             return
         }
+
+        cancelCompetingSecondaryWebViewLoads(
+            source: translationCoordinator.effectiveSourceLanguage(
+                for: source,
+                selectedLanguage: currentSourceLanguage
+            ),
+            target: currentTargetLanguage
+        )
 
         translationInputGeneration += 1
         let inputGeneration = translationInputGeneration

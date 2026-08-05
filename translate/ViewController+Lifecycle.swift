@@ -226,9 +226,9 @@ extension ViewController {
         installWindowBehaviorBar()
         installConnectionOverlay()
         installLongTextOverlay()
-        // Present the app-owned empty editor immediately. A cold WebKit load
-        // continues in the background and should not make a healthy launch
-        // look like a multi-second network check.
+        // Construct the native editor immediately, but keep it behind the
+        // connection cover until WebKit and the real translation warmup are
+        // both complete.
         longTextOverlay?.isHidden = false
         refreshWorkspaceLanguageTitles()
 
@@ -267,12 +267,8 @@ extension ViewController {
         // for cold-launch typing and must not wait behind the second, automatic-
         // detection Google document competing for the same WebKit resources.
         loadTranslationService()
-        // Keep automatic detection warm as well, but enqueue it only after the
-        // primary navigation has been started. Both loads remain asynchronous.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.loadAutomaticTranslationService(target: self.currentTargetLanguage)
-        }
+        // Other Google documents start only after the primary connection
+        // probe finishes, or immediately when a real request needs one.
     }
 
     override func viewDidLayout() {
