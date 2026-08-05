@@ -245,25 +245,34 @@ final class TranslationPerformanceDiagnostics {
     func recordTailFollowingEvent(
         stage: String,
         status: String,
+        requestID: Int = 0,
+        session: Int = 0,
         sequence: Int,
         trigger: String,
         followsTail: Bool?,
+        previousFollowsTail: Bool? = nil,
         resultUTF16: Int,
+        scheduledResultUTF16: Int? = nil,
         documentHeight: Double? = nil,
         viewportHeight: Double? = nil,
         visibleMaxY: Double? = nil,
         distanceFromBottom: Double? = nil,
-        reason: String? = nil
+        reason: String? = nil,
+        eventDate: Date = Date(),
+        eventUptime: CFTimeInterval = CACurrentMediaTime()
     ) {
         guard AppBuildMetadata.isDebugBuild else { return }
         queue.async { [self] in
+            let elapsed = requests[requestID].map {
+                max(0, (eventUptime - $0.startedAt) * 1_000)
+            } ?? 0
             var record: [String: Any] = [
-                "timestamp": Self.timestamp(),
+                "timestamp": Self.timestamp(eventDate),
                 "run_id": runID,
-                "request_id": 0,
+                "request_id": requestID,
                 "level": 2,
                 "stage": stage,
-                "elapsed_ms": 0.0,
+                "elapsed_ms": Self.roundedMilliseconds(elapsed),
                 "stage_ms": 0.0,
                 "text_chars": 0,
                 "text_utf16": resultUTF16,
@@ -272,7 +281,14 @@ final class TranslationPerformanceDiagnostics {
                 "sequence": sequence,
                 "trigger": trigger
             ]
+            if session > 0 { record["translation_session"] = session }
             if let followsTail { record["follows_tail"] = followsTail }
+            if let previousFollowsTail {
+                record["previous_follows_tail"] = previousFollowsTail
+            }
+            if let scheduledResultUTF16 {
+                record["scheduled_result_utf16"] = scheduledResultUTF16
+            }
             if let documentHeight { record["document_height"] = documentHeight }
             if let viewportHeight { record["viewport_height"] = viewportHeight }
             if let visibleMaxY { record["visible_max_y"] = visibleMaxY }
@@ -469,7 +485,9 @@ final class TranslationPerformanceDiagnostics {
         (value * 1_000).rounded() / 1_000
     }
 
-    private static func timestamp() -> String {
-        ISO8601DateFormatter().string(from: Date())
+    private static func timestamp(_ date: Date = Date()) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 }

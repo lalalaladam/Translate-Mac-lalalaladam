@@ -150,14 +150,20 @@ extension ViewController {
                 const translation = isSingleWord
                     ? (candidateTexts[0] || "").split(/\s+/).filter(Boolean)[0] || ""
                     : candidateTexts.join("\n");
-                if (window.__macTranslateWaitForDifferentResult &&
-                    translation === window.__macTranslateBlockedTranslation) {
-                    return [source, ""];
+                const blockedByPreviousResult =
+                    window.__macTranslateWaitForDifferentResult &&
+                    translation === window.__macTranslateBlockedTranslation;
+                const mutationCount =
+                    window.__macTranslateActiveTiming?.resultMutationCount || 0;
+                const networkSummary =
+                    window.__macTranslateResourceTimingSummary?.() || {};
+                if (blockedByPreviousResult) {
+                    return [source, "", true, mutationCount, networkSummary];
                 }
                 if (translation) {
                     window.__macTranslateWaitForDifferentResult = false;
                 }
-                return [source, translation];
+                return [source, translation, false, mutationCount, networkSummary];
             })();
         """#) { [weak self] result, _ in
             guard let self else { return }
@@ -178,6 +184,15 @@ extension ViewController {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let extractedTranslation = (payload?.dropFirst().first as? String ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let blockedByPreviousResult =
+                payload?.dropFirst(2).first as? Bool ?? false
+            let mutationCount =
+                (payload?.dropFirst(3).first as? NSNumber)?.intValue ?? 0
+            let rawWebTimingFields =
+                payload?.dropFirst(4).first as? [String: Any] ?? [:]
+            let webTimingFields = self.webTimingDiagnosticFields(
+                from: rawWebTimingFields
+            )
             logTextPipelineSnapshot("google-dom-result-before-normalization", extractedTranslation)
             let translation = TranslationServiceTextNormalizer.normalize(
                 extractedTranslation,
@@ -188,6 +203,15 @@ extension ViewController {
             // exact chunk currently being translated. This prevents a
             // previous chunk's DOM result from being appended to the next.
             guard observedSource == expectedSource else {
+                self.logWebResultRejection(
+                    in: serviceWebView,
+                    reason: "source-mismatch",
+                    observedSourceMatches: false,
+                    blockedByPreviousResult: blockedByPreviousResult,
+                    extractedUTF16: translation.utf16.count,
+                    mutationCount: mutationCount,
+                    webTimingFields: webTimingFields
+                )
                 self.scheduleLongTextPoll(session: session)
                 return
             }
@@ -198,6 +222,23 @@ extension ViewController {
                 ) != nil
 
             if isLoading {
+                let reason: String
+                if blockedByPreviousResult {
+                    reason = "baseline-blocked"
+                } else if translation.isEmpty {
+                    reason = "empty-result"
+                } else {
+                    reason = "loading-placeholder"
+                }
+                self.logWebResultRejection(
+                    in: serviceWebView,
+                    reason: reason,
+                    observedSourceMatches: true,
+                    blockedByPreviousResult: blockedByPreviousResult,
+                    extractedUTF16: translation.utf16.count,
+                    mutationCount: mutationCount,
+                    webTimingFields: webTimingFields
+                )
                 self.scheduleLongTextPoll(session: session)
                 return
             }
@@ -285,6 +326,13 @@ extension ViewController {
         }
 
         translationCoordinator.fallbackShouldFinalize = true
+        let rejectionFields = translationCoordinator.webResultRejectionSummaryFields
+        if !rejectionFields.isEmpty {
+            logTranslationTiming(
+                "web-deadline-rejection-summary",
+                diagnosticFields: rejectionFields
+            )
+        }
         if let provisional = translationCoordinator.provisionalFallbackTranslation {
             logTranslationTiming("api-provisional-promoted-to-final")
             appendLongTextTranslation(

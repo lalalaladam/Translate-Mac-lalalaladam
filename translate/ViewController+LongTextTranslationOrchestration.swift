@@ -15,6 +15,8 @@ struct ParallelWebTranslationChunk {
     var candidateUpdatedAt: Date?
     var completedTranslation: String?
     var didLogBlockedBaseline = false
+    var loggedRejectionReasons: Set<String> = []
+    var rejectionCounts: [String: Int] = [:]
 }
 
 struct ParallelWebTranslationBatch {
@@ -66,6 +68,14 @@ extension ViewController {
                 )
             }
             let status = setLongTextStatus(.completed)
+            if translationTimingRequest?.didLogFinalDisplay == false,
+               !completedTranslation.isEmpty {
+                translationTimingRequest?.didLogFinalDisplay = true
+                logTranslationTiming(
+                    "final-result-displayed",
+                    details: "source=completed translation batch"
+                )
+            }
             if let requestID = translationTimingRequest?.id {
                 TranslationPerformanceDiagnostics.shared.finish(
                     requestID: requestID,
@@ -159,17 +169,24 @@ extension ViewController {
             sourceLanguage: longTextSourceLanguage,
             targetLanguage: longTextTargetLanguage,
             onStarted: { [weak self] in
-                self?.logTranslationTiming("parallel-api-batch-started")
+                guard let self else { return }
+                self.logTranslationTiming(
+                    "parallel-api-batch-started",
+                    diagnosticFields: [
+                        "reused_web_chunk_count":
+                            self.translationCoordinator.concurrentAPIWebResultIndexes.count
+                    ]
+                )
             },
             onChunkReady: { [weak self] in
                 self?.logTranslationTiming("parallel-api-chunk-ready")
             },
             onOrderedResults: { [weak self] results, completed in
                 guard let self else { return }
-                if !results.isEmpty {
-                    self.translationResultProviders.insert(.api)
-                }
                 for result in results {
+                    self.translationResultProviders.insert(
+                        result.usedAPI ? .api : .web
+                    )
                     if result.replacesVisibleTranslation {
                         self.longTextTranslation =
                             result.translation + result.separator
@@ -179,6 +196,22 @@ extension ViewController {
                     }
                 }
                 self.displayLongTextTranslationFollowingTail(self.longTextTranslation)
+                if let firstResult = results.first {
+                    let provider: TranslationResultProvider = firstResult.usedAPI
+                        ? .api
+                        : .web
+                    self.logFirstVisibleTranslationIfNeeded(provider: provider)
+                    if self.translationTimingRequest?.didLogFirstVerifiedDisplay == false {
+                        self.translationTimingRequest?.didLogFirstVerifiedDisplay = true
+                        self.logTranslationTiming(
+                            "first-valid-result-displayed",
+                            diagnosticFields: [
+                                "provider": firstResult.usedAPI ? "api" : "web",
+                                "translation_path": "ordered-batch"
+                            ]
+                        )
+                    }
+                }
                 self.updateInlineLongText(
                     source: nil,
                     translation: self.longTextTranslation,
@@ -341,14 +374,16 @@ extension ViewController {
                     // Joining them with spaces erased an inserted Return and
                     // made the stale-result guard behave inconsistently.
                     const translation = texts.join("\n");
+                    const mutationCount =
+                        window.__macTranslateParallelResultMutationCount || 0;
                     if (window.__macTranslateParallelWaitForDifferentResult &&
                         translation === window.__macTranslateParallelBlockedTranslation) {
-                        return [source, "", true];
+                        return [source, "", true, mutationCount];
                     }
                     if (translation) {
                         window.__macTranslateParallelWaitForDifferentResult = false;
                     }
-                    return [source, translation, false];
+                    return [source, translation, false, mutationCount];
                 };
                 if (!inputAlreadyCurrent) {
                     window.__macTranslateParallelWaitForDifferentResult = false;
@@ -361,6 +396,24 @@ extension ViewController {
                 } else {
                     window.__macTranslateParallelWaitForDifferentResult = false;
                 }
+                window.__macTranslateParallelDiagnosticObserver?.disconnect();
+                window.__macTranslateParallelResultMutationCount = 0;
+                window.__macTranslateParallelDiagnosticObserver = new MutationObserver(
+                    (records) => {
+                        const touchesResult = records.some((record) => {
+                            const target = record.target?.nodeType === Node.ELEMENT_NODE
+                                ? record.target : record.target?.parentElement;
+                            return Boolean(target?.closest?.(".QcsUad"));
+                        });
+                        if (touchesResult) {
+                            window.__macTranslateParallelResultMutationCount += 1;
+                        }
+                    }
+                );
+                window.__macTranslateParallelDiagnosticObserver.observe(
+                    document.documentElement,
+                    { childList: true, subtree: true, characterData: true }
+                );
                 const setter = Object.getOwnPropertyDescriptor(
                     HTMLTextAreaElement.prototype,
                     "value"
@@ -434,13 +487,16 @@ extension ViewController {
                 // fall back to a second, whitespace-flattening parser while
                 // that setup is temporarily unavailable.
                 const source = document.querySelector("textarea")?.value || "";
-                return [source, "", false];
+                return [source, "", false,
+                    window.__macTranslateParallelResultMutationCount || 0];
             })();
         """#) { [weak self] result, _ in
-            self?.handleParallelWebResult(
+            guard let self else { return }
+            self.handleParallelWebResult(
                 result,
                 forChunkIndex: chunk.index,
-                session: session
+                session: session,
+                webViewRole: self.translationWebViewRole(serviceWebView)
             )
         }
     }
@@ -448,7 +504,8 @@ extension ViewController {
     func handleParallelWebResult(
         _ result: Any?,
         forChunkIndex chunkIndex: Int,
-        session: Int
+        session: Int,
+        webViewRole: String
     ) {
         guard var batch = parallelWebTranslationBatch,
               batch.session == session,
@@ -463,6 +520,7 @@ extension ViewController {
         let extractedTranslation = (payload?.dropFirst().first as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let blockedByPreviousResult = payload?.dropFirst(2).first as? Bool ?? false
+        let mutationCount = (payload?.dropFirst(3).first as? NSNumber)?.intValue ?? 0
         let expectedSource = chunk.source.trimmingCharacters(in: .whitespacesAndNewlines)
         let translation = TranslationServiceTextNormalizer.normalize(
             extractedTranslation,
@@ -475,6 +533,32 @@ extension ViewController {
             ) != nil
 
         guard observedSource == expectedSource, !isLoading else {
+            let rejectionReason: String
+            if observedSource != expectedSource {
+                rejectionReason = "source-mismatch"
+            } else if blockedByPreviousResult {
+                rejectionReason = "baseline-blocked"
+            } else if translation.isEmpty {
+                rejectionReason = "empty-result"
+            } else {
+                rejectionReason = "loading-placeholder"
+            }
+            chunk.rejectionCounts[rejectionReason, default: 0] += 1
+            if chunk.loggedRejectionReasons.insert(rejectionReason).inserted {
+                logTranslationTiming(
+                    "parallel-web-result-rejected",
+                    diagnosticFields: [
+                        "chunk_index": chunkIndex,
+                        "chunk_source_utf16": chunk.source.utf16.count,
+                        "webview_role": webViewRole,
+                        "rejection_reason": rejectionReason,
+                        "observed_source_matches": observedSource == expectedSource,
+                        "blocked_by_previous_result": blockedByPreviousResult,
+                        "result_mutation_count": mutationCount
+                    ]
+                )
+            }
+            batch.chunks[chunkIndex] = chunk
             if blockedByPreviousResult, !chunk.didLogBlockedBaseline {
                 chunk.didLogBlockedBaseline = true
                 batch.chunks[chunkIndex] = chunk
@@ -623,6 +707,17 @@ extension ViewController {
         }
         displayLongTextTranslationFollowingTail(longTextTranslation)
         translationResultProviders.insert(.web)
+        logFirstVisibleTranslationIfNeeded(provider: .web)
+        if translationTimingRequest?.didLogFirstVerifiedDisplay == false {
+            translationTimingRequest?.didLogFirstVerifiedDisplay = true
+            logTranslationTiming(
+                "first-valid-result-displayed",
+                diagnosticFields: [
+                    "provider": "web",
+                    "translation_path": "parallel-web-batch"
+                ]
+            )
+        }
         translationCoordinator.chunkIndex = translationCoordinator.chunks.count
         logTranslationTiming("parallel-web-batch-completed")
         translateNextLongTextChunk(session: session)
@@ -635,6 +730,26 @@ extension ViewController {
             return
         }
         batch.scheduledPoll?.cancel()
+        let reusableWebResults = batch.chunks.reduce(into: [Int: String]()) {
+            results, item in
+            if let translation = item.value.completedTranslation {
+                results[item.key] = translation
+            }
+        }
+        for chunk in batch.chunks.values where chunk.completedTranslation == nil {
+            var fields: [String: Any] = [
+                "chunk_index": chunk.index,
+                "chunk_source_utf16": chunk.source.utf16.count,
+                "candidate_available": chunk.candidateTranslation != nil
+            ]
+            chunk.rejectionCounts.forEach { reason, count in
+                fields["rejection_\(reason)_count"] = count
+            }
+            logTranslationTiming(
+                "parallel-web-chunk-fallback-diagnostic",
+                diagnosticFields: fields
+            )
+        }
         parallelWebTranslationBatch = nil
         activeTranslationWebView?.evaluateJavaScript(
             "window.__macTranslateResultObserver?.disconnect();",
@@ -644,8 +759,16 @@ extension ViewController {
             "window.__macTranslateResultObserver?.disconnect();",
             completionHandler: nil
         )
-        translationCoordinator.enableConcurrentAPIFallback()
-        logTranslationTiming("parallel-web-batch-api-fallback")
+        translationCoordinator.enableConcurrentAPIFallback(
+            reusingWebResults: reusableWebResults
+        )
+        logTranslationTiming(
+            "parallel-web-batch-api-fallback",
+            diagnosticFields: [
+                "reused_web_chunk_count": reusableWebResults.count,
+                "api_chunk_count": batch.chunks.count - reusableWebResults.count
+            ]
+        )
         startConcurrentLongTextAPIBatchIfNeeded(session: session)
     }
 

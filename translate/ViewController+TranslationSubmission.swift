@@ -149,7 +149,10 @@ extension ViewController {
         )
         if !formattingOnlyRefresh {
             (longTextTranslationView?.enclosingScrollView as? TranslationResultScrollView)?
-                .beginTailFollowingSession(session)
+                .beginTailFollowingSession(
+                    session,
+                    requestID: translationTimingRequest?.id ?? 0
+                )
         }
         updateTranslationTimingSession(session)
         longTextSource = source

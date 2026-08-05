@@ -214,7 +214,7 @@ extension ViewController: WKScriptMessageHandler {
         }
     }
 
-    private func webTimingDiagnosticFields(
+    func webTimingDiagnosticFields(
         from payload: [String: Any]
     ) -> [String: Any] {
         let keys: [String: String] = [

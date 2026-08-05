@@ -104,6 +104,7 @@ extension ViewController {
                     session: \#(session),
                     jsStartedAt,
                     firstResultMutationAt: null,
+                    resultMutationCount: 0,
                     inputDispatchedAt: jsStartedAt
                 };
                 const resourceTimingSummary = () => {
@@ -303,6 +304,9 @@ extension ViewController {
                         });
                     });
                     if (!touchesResult) return;
+                    if (window.__macTranslateActiveTiming) {
+                        window.__macTranslateActiveTiming.resultMutationCount += 1;
+                    }
                     clearTimeout(window.__macTranslateResultNotificationTimer);
                     window.__macTranslateResultNotificationTimer = setTimeout(() => {
                         // Mutations inside Google's translation card are not
