@@ -150,6 +150,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var connectionSpinner: NSProgressIndicator?
     var connectionRetryButton: NSButton?
     var loadTimeoutWorkItem: DispatchWorkItem?
+    var startupWebViewBarrierTimeoutWorkItem: DispatchWorkItem?
+    var startupWebViewBarrierStartedAt: CFTimeInterval?
+    var startupWebViewLoadStartedAt: [String: CFTimeInterval] = [:]
+    var startupReadyWebViewRoles: Set<String> = []
+    var startupWebViewBarrierActive = false
     var delayedConnectionOverlayWorkItem: DispatchWorkItem?
     var automaticRetryWorkItem: DispatchWorkItem?
     var automaticTranslationWarmupWorkItem: DispatchWorkItem?
@@ -267,6 +272,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
 
     deinit {
         loadTimeoutWorkItem?.cancel()
+        startupWebViewBarrierTimeoutWorkItem?.cancel()
         delayedConnectionOverlayWorkItem?.cancel()
         automaticRetryWorkItem?.cancel()
         automaticTranslationWarmupWorkItem?.cancel()
