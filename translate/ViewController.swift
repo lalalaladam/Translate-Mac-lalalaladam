@@ -102,6 +102,9 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var pendingAutomaticTranslationSession: Int?
     var pendingPrimaryTranslationSource: String?
     var pendingPrimaryTranslationSession: Int?
+    var pendingParallelReadySource: String?
+    var pendingParallelReadySession: Int?
+    var pendingParallelReadyWorkItem: DispatchWorkItem?
     let startupTimingOrigin = ProcessInfo.processInfo.systemUptime
     var didLogFirstTranslationCommand = false
     var didLogFirstTextInjection = false
@@ -264,6 +267,7 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
         automaticTranslationWarmupWorkItem?.cancel()
         secondaryWebViewWarmupWorkItem?.cancel()
         parallelWebViewWarmupWorkItem?.cancel()
+        pendingParallelReadyWorkItem?.cancel()
         primaryWebWarmupTimeoutWorkItem?.cancel()
         translationCoordinator.debounceWorkItem?.cancel()
         stopSpeaking()
