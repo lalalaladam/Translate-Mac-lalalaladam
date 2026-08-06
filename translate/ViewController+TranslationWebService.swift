@@ -370,6 +370,10 @@ extension ViewController {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // A navigation replaces the page and its translation DOM. Do not let
+        // a snapshot from the preceding language pair become a baseline for
+        // the newly loaded service page.
+        webTranslationSnapshots.removeValue(forKey: ObjectIdentifier(webView))
         let label = webView === automaticTranslationWebView
             ? "Automatic"
             : (webView === standbyTranslationWebView
