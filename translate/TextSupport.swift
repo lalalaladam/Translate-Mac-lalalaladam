@@ -27,6 +27,7 @@ class AlignmentTextView: NSTextView {
 final class TranslationSourceTextView: AlignmentTextView {
     private var hasPendingImmediatePaste = false
     private var beginsNewSessionAfterEdit = false
+    private var pasteLayoutGeneration = 0
     private let sourceUndoGrouping = SourceTextUndoGrouping()
     private(set) var isPerformingHistoryNavigation = false
     var onPasteReceived: ((String?) -> Void)?
@@ -127,6 +128,8 @@ final class TranslationSourceTextView: AlignmentTextView {
             if string == sourceBeforePaste {
                 hasPendingImmediatePaste = false
                 beginsNewSessionAfterEdit = false
+            } else {
+                synchronizeLayoutAfterPaste()
             }
             return
         }
@@ -134,6 +137,34 @@ final class TranslationSourceTextView: AlignmentTextView {
         if string == sourceBeforePaste {
             hasPendingImmediatePaste = false
             beginsNewSessionAfterEdit = false
+        } else {
+            synchronizeLayoutAfterPaste()
+        }
+    }
+
+    /// `insertText` commits the storage change synchronously, while TextKit can
+    /// defer the document-view resize until a later layout pass. Finish that
+    /// pass before asking the scroll view to reveal the post-paste insertion
+    /// point, so its scroll range and overlay scroller describe the same text.
+    private func synchronizeLayoutAfterPaste() {
+        pasteLayoutGeneration += 1
+        let generation = pasteLayoutGeneration
+        let selectionAfterPaste = selectedRange()
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  generation == self.pasteLayoutGeneration,
+                  self.selectedRange() == selectionAfterPaste else { return }
+
+            if let layoutManager = self.layoutManager,
+               let textContainer = self.textContainer {
+                layoutManager.ensureLayout(for: textContainer)
+            }
+            self.layoutSubtreeIfNeeded()
+            self.scrollRangeToVisible(selectionAfterPaste)
+            if let scrollView = self.enclosingScrollView {
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
         }
     }
 }
