@@ -27,6 +27,9 @@ extension ViewController {
         primaryWebWarmupGeneration += 1
         let generation = primaryWebWarmupGeneration
         primaryWebWarmupState = .running
+        if startupWebViewBarrierActive {
+            logStartupWebViewEvent("startup-webview-probe-started", role: "primary")
+        }
         let encodedProbe = Data(Self.primaryWebWarmupProbe.utf8).base64EncodedString()
         // DOM readiness alone does not prove that Google's translation
         // request path is warm. Keep the native connection cover visible
@@ -153,6 +156,18 @@ extension ViewController {
         primaryWebWarmupTimeoutWorkItem = nil
         primaryWebWarmupState = .finished
         logTranslationCoordinator("primary-web-warmup-\(status)", source: "")
+        if startupWebViewBarrierActive {
+            if status == "ready" {
+                markStartupWebViewReady(webView)
+            } else {
+                logStartupWebViewEvent(
+                    "startup-webview-probe-failed",
+                    role: "primary",
+                    extraFields: ["probe_status": status]
+                )
+            }
+            return
+        }
         hideConnectionOverlay()
         // The primary request path is now proven healthy. Start only the one
         // secondary page most likely to be needed next; parallel same-direction
@@ -186,6 +201,12 @@ extension ViewController {
     }
 
     func configureTranslationPageAfterDOMReady(_ webView: WKWebView) {
+        if startupWebViewBarrierActive {
+            logStartupWebViewEvent(
+                "startup-webview-dom-ready",
+                role: translationWebViewRole(webView)
+            )
+        }
         if webView === parallelTranslationWebView {
             guard translationPageMatches(
                 source: parallelTranslationSource,
@@ -199,6 +220,7 @@ extension ViewController {
             markTranslationWebServiceReady(webView)
             installTranslationTimingRuntime(in: webView)
             logStartupTiming("Parallel translation service ready")
+            markStartupWebViewReady(webView)
             resumeTranslationWaitingForParallelIfCurrent()
             return
         }
@@ -224,6 +246,7 @@ extension ViewController {
             automaticTranslationWebViewReady = true
             markTranslationWebServiceReady(webView)
             translationCoordinator.markWebServiceActive()
+            markStartupWebViewReady(webView)
             if let source = pendingAutomaticTranslationSource,
                pendingAutomaticTranslationSession == translationCoordinator.session,
                longTextSource == source,
@@ -254,6 +277,7 @@ extension ViewController {
             translationCoordinator.markWebServiceActive()
             installTranslationTimingRuntime(in: webView)
             logStartupTiming("Standby translation service ready")
+            markStartupWebViewReady(webView)
             scheduleAutomaticWarmupAfterStandbyIfIdle()
             if let pendingSource = pendingPrimaryTranslationSource,
                pendingPrimaryTranslationSession == translationCoordinator.session {

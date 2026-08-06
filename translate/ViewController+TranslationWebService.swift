@@ -18,6 +18,140 @@ extension ViewController {
         primaryWebWarmupState = .idle
     }
 
+    private var requiredStartupWebViewRoles: Set<String> {
+        var roles: Set<String> = ["primary", "automatic", "parallel"]
+        if currentSourceLanguage != .automatic,
+           currentSourceLanguage != currentTargetLanguage {
+            roles.insert("standby")
+        }
+        return roles
+    }
+
+    func logStartupWebViewEvent(
+        _ stage: String,
+        role: String,
+        extraFields: [String: Any] = [:]
+    ) {
+        let now = CACurrentMediaTime()
+        var fields = extraFields
+        fields["webview_role"] = role
+        if let barrierStartedAt = startupWebViewBarrierStartedAt {
+            fields["startup_elapsed_ms"] = max(0, (now - barrierStartedAt) * 1_000)
+        }
+        if let loadStartedAt = startupWebViewLoadStartedAt[role] {
+            fields["webview_load_elapsed_ms"] = max(0, (now - loadStartedAt) * 1_000)
+        }
+        logTranslationTiming(stage, diagnosticFields: fields)
+    }
+
+    func markStartupWebViewReady(_ webView: WKWebView) {
+        guard startupWebViewBarrierActive else { return }
+        let role = translationWebViewRole(webView)
+        guard requiredStartupWebViewRoles.contains(role),
+              startupReadyWebViewRoles.insert(role).inserted else { return }
+        logStartupWebViewEvent(
+            "startup-webview-ready",
+            role: role,
+            extraFields: [
+                "ready_count": startupReadyWebViewRoles.count,
+                "required_ready_count": requiredStartupWebViewRoles.count
+            ]
+        )
+        finishStartupWebViewBarrierIfReady()
+    }
+
+    func finishStartupWebViewBarrierIfReady() {
+        guard startupWebViewBarrierActive,
+              startupReadyWebViewRoles == requiredStartupWebViewRoles else { return }
+        startupWebViewBarrierActive = false
+        startupWebViewBarrierTimeoutWorkItem?.cancel()
+        startupWebViewBarrierTimeoutWorkItem = nil
+        logStartupWebViewEvent(
+            "startup-all-webviews-ready",
+            role: "all",
+            extraFields: ["ready_count": startupReadyWebViewRoles.count]
+        )
+        hideConnectionOverlay()
+    }
+
+    func startConcurrentStartupWebViewLoads() {
+        let source = currentSourceLanguage
+        let target = currentTargetLanguage
+        startupWebViewBarrierTimeoutWorkItem?.cancel()
+        startupWebViewBarrierStartedAt = CACurrentMediaTime()
+        startupWebViewLoadStartedAt.removeAll(keepingCapacity: true)
+        startupReadyWebViewRoles.removeAll(keepingCapacity: true)
+        startupWebViewBarrierActive = true
+        logStartupWebViewEvent(
+            "startup-webview-barrier-started",
+            role: "all",
+            extraFields: ["required_ready_count": requiredStartupWebViewRoles.count]
+        )
+        startupWebViewLoadStartedAt["primary"] = startupWebViewBarrierStartedAt
+        logStartupWebViewEvent("startup-webview-load-started", role: "primary")
+
+        let startLoad = { [weak self] (role: String, action: () -> Void) in
+            guard let self else { return }
+            self.startupWebViewLoadStartedAt[role] = CACurrentMediaTime()
+            self.logStartupWebViewEvent("startup-webview-load-started", role: role)
+            action()
+        }
+        startLoad("automatic") {
+            self.loadAutomaticTranslationService(target: target)
+        }
+        if automaticTranslationWebViewReady,
+           translationPageMatches(
+               source: .automatic,
+               target: target,
+               in: automaticTranslationWebView
+           ) {
+            markStartupWebViewReady(automaticTranslationWebView)
+        }
+        if requiredStartupWebViewRoles.contains("standby") {
+            startLoad("standby") {
+                self.warmStandbyTranslationService(source: target, target: source)
+            }
+            if standbyTranslationWebViewReady,
+               translationPageMatches(
+                   source: target,
+                   target: source,
+                   in: standbyTranslationWebView
+               ) {
+                markStartupWebViewReady(standbyTranslationWebView)
+            }
+        }
+        startLoad("parallel") {
+            self.warmParallelTranslationService(source: source, target: target)
+        }
+        if parallelTranslationWebViewReady,
+           translationPageMatches(
+               source: source,
+               target: target,
+               in: parallelTranslationWebView
+           ) {
+            markStartupWebViewReady(parallelTranslationWebView)
+        }
+
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, self.startupWebViewBarrierActive else { return }
+            let missing = self.requiredStartupWebViewRoles
+                .subtracting(self.startupReadyWebViewRoles)
+                .sorted()
+                .joined(separator: ",")
+            self.logStartupWebViewEvent(
+                "startup-webview-barrier-timeout",
+                role: "all",
+                extraFields: [
+                    "ready_count": self.startupReadyWebViewRoles.count,
+                    "missing_roles": missing
+                ]
+            )
+            self.showConnectionOverlay(waitingForNetwork: false)
+        }
+        startupWebViewBarrierTimeoutWorkItem = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 16, execute: timeout)
+    }
+
     func scheduleIdleSecondaryWebViewWarmups(after delay: TimeInterval) {
         secondaryWebViewWarmupWorkItem?.cancel()
         let source = currentSourceLanguage
@@ -256,6 +390,7 @@ extension ViewController {
                 timeoutInterval: 15
             )
         )
+        startConcurrentStartupWebViewLoads()
 
         let timeout = DispatchWorkItem { [weak self] in
             guard let self,
@@ -324,6 +459,17 @@ extension ViewController {
         didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error
     ) {
+        if startupWebViewBarrierActive {
+            logStartupWebViewEvent(
+                "startup-webview-load-failed",
+                role: translationWebViewRole(webView),
+                extraFields: [
+                    "failure_phase": "provisional-navigation",
+                    "error_domain": (error as NSError).domain,
+                    "error_code": (error as NSError).code
+                ]
+            )
+        }
         if webView === parallelTranslationWebView {
             prefersParallelTranslationWebView = false
             parallelTranslationWebViewReady = false
@@ -349,6 +495,17 @@ extension ViewController {
         didFail navigation: WKNavigation!,
         withError error: Error
     ) {
+        if startupWebViewBarrierActive {
+            logStartupWebViewEvent(
+                "startup-webview-load-failed",
+                role: translationWebViewRole(webView),
+                extraFields: [
+                    "failure_phase": "navigation",
+                    "error_domain": (error as NSError).domain,
+                    "error_code": (error as NSError).code
+                ]
+            )
+        }
         if webView === parallelTranslationWebView {
             prefersParallelTranslationWebView = false
             parallelTranslationWebViewReady = false
@@ -370,6 +527,12 @@ extension ViewController {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if startupWebViewBarrierActive {
+            logStartupWebViewEvent(
+                "startup-webview-navigation-finished",
+                role: translationWebViewRole(webView)
+            )
+        }
         // A navigation replaces the page and its translation DOM. Do not let
         // a snapshot from the preceding language pair become a baseline for
         // the newly loaded service page.
@@ -381,6 +544,14 @@ extension ViewController {
                 : (webView === parallelTranslationWebView ? "Parallel" : "Primary"))
         logStartupTiming("\(label) navigation finished")
         waitForTranslationDOM(in: webView)
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard startupWebViewBarrierActive else { return }
+        logStartupWebViewEvent(
+            "startup-webview-navigation-committed",
+            role: translationWebViewRole(webView)
+        )
     }
 
     func waitForTranslationDOM(in webView: WKWebView) {
@@ -452,7 +623,7 @@ extension ViewController {
            !hasVisibleSource,
            startPrimaryWebWarmupIfPossible() {
             return
-        } else {
+        } else if !startupWebViewBarrierActive {
             hideConnectionOverlay()
             // Preserve the existing first-request recovery capacity when the
             // user submits before DOM readiness: the real request owns all
@@ -591,15 +762,17 @@ extension ViewController {
         source: TranslateLanguage,
         target: TranslateLanguage
     ) {
-        guard isReady,
-              target.canBeTarget,
-              let activeTranslationWebView,
-              translationPageMatches(
-                  source: source,
-                  target: target,
-                  in: activeTranslationWebView
-              ) else {
+        guard target.canBeTarget else {
             return
+        }
+        if !startupWebViewBarrierActive {
+            guard isReady,
+                  let activeTranslationWebView,
+                  translationPageMatches(
+                      source: source,
+                      target: target,
+                      in: activeTranslationWebView
+                  ) else { return }
         }
         if parallelTranslationSource == source,
            parallelTranslationTarget == target,
