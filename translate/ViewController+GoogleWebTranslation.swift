@@ -91,6 +91,12 @@ extension ViewController {
         )
         let serviceGeneration = translationCoordinator.activeWebViewGeneration
         let timingRequestID = translationTimingRequest?.id ?? 0
+        let cachedSnapshot = webTranslationSnapshots[ObjectIdentifier(serviceWebView)]
+        let cachedBlockedTranslation = cachedSnapshot?.source != chunk
+            ? cachedSnapshot?.translation ?? ""
+            : ""
+        let encodedCachedBlockedTranslation = Data(cachedBlockedTranslation.utf8)
+            .base64EncodedString()
         let evaluationStartedAt = CACurrentMediaTime()
         logTranslationTiming("evaluate-javascript-started")
 
@@ -152,6 +158,10 @@ extension ViewController {
                 window.__macTranslateResourceTimingSummary = resourceTimingSummary;
                 const value = new TextDecoder().decode(
                     Uint8Array.from(atob("\#(encoded)"), (character) =>
+                        character.charCodeAt(0))
+                );
+                const cachedBlockedTranslation = new TextDecoder().decode(
+                    Uint8Array.from(atob("\#(encodedCachedBlockedTranslation)"), (character) =>
                         character.charCodeAt(0))
                 );
                 const inputAlreadyCurrent = textarea.value === value;
@@ -266,7 +276,7 @@ extension ViewController {
                         ? (texts[0] || "").split(/\s+/).filter(Boolean)[0] || ""
                         : texts.join("\n");
                     if (window.__macTranslateWaitForDifferentResult &&
-                        translation === window.__macTranslateBlockedTranslation) {
+                        window.__macTranslateBlockedTranslations?.includes(translation)) {
                         return [source, ""];
                     }
                     if (translation) {
@@ -282,9 +292,14 @@ extension ViewController {
                 if (!inputAlreadyCurrent) {
                     window.__macTranslateWaitForDifferentResult = false;
                     const previousPayload = window.__macTranslateReadCurrentResult();
-                    window.__macTranslateBlockedTranslation = previousPayload?.[1] || "";
+                    window.__macTranslateBlockedTranslations = [
+                        cachedBlockedTranslation,
+                        previousPayload?.[1] || ""
+                    ].filter((translation, index, all) =>
+                        Boolean(translation) && all.indexOf(translation) === index
+                    );
                     window.__macTranslateWaitForDifferentResult =
-                        Boolean(window.__macTranslateBlockedTranslation);
+                        window.__macTranslateBlockedTranslations.length > 0;
                 }
                 window.__macTranslateResultObserver?.disconnect();
                 clearTimeout(window.__macTranslateResultNotificationTimer);
@@ -369,7 +384,10 @@ extension ViewController {
                         textareaWrittenMS: textareaWrittenAt - jsStartedAt,
                         inputDispatchedMS: inputDispatchedAt - jsStartedAt,
                         pageVisibility: document.visibilityState,
-                        pageFocused: document.hasFocus()
+                        pageFocused: document.hasFocus(),
+                        baselineOrigin: cachedBlockedTranslation ? "cache+dom" : "dom",
+                        blockedCandidateSourceUTF16: cachedBlockedTranslation
+                            ? \#(cachedSnapshot?.source.utf16.count ?? 0) : 0
                     });
                 } else {
                     // The result may have completed before this observer was

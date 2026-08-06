@@ -152,7 +152,7 @@ extension ViewController {
                     : candidateTexts.join("\n");
                 const blockedByPreviousResult =
                     window.__macTranslateWaitForDifferentResult &&
-                    translation === window.__macTranslateBlockedTranslation;
+                    window.__macTranslateBlockedTranslations?.includes(translation);
                 const mutationCount =
                     window.__macTranslateActiveTiming?.resultMutationCount || 0;
                 const networkSummary =
@@ -246,6 +246,11 @@ extension ViewController {
             if self.translationCoordinator.noteValidGoogleWebCandidate() {
                 self.logTranslationTiming("api-provisional-cancelled-web-won")
             }
+            self.webTranslationSnapshots[ObjectIdentifier(serviceWebView)] =
+                WebTranslationSnapshot(
+                    source: expectedSource,
+                    translation: translation
+                )
             self.rememberSuccessfulWebViewAfterStallRecovery()
 
             if self.translationTimingRequest?.didLogFirstValidExtraction == false {

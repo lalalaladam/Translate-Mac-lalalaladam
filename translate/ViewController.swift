@@ -98,6 +98,11 @@ class ViewController: NSViewController, WKNavigationDelegate, NSTextViewDelegate
     var parallelTranslationTarget = TranslateLanguagePreferences.target
     var prefersParallelTranslationWebView = false
     var parallelWebTranslationBatch: ParallelWebTranslationBatch?
+    struct WebTranslationSnapshot {
+        let source: String
+        let translation: String
+    }
+    var webTranslationSnapshots: [ObjectIdentifier: WebTranslationSnapshot] = [:]
     var pendingAutomaticTranslationSource: String?
     var pendingAutomaticTranslationSession: Int?
     var pendingPrimaryTranslationSource: String?

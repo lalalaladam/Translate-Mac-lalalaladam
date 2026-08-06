@@ -109,6 +109,14 @@ extension ViewController: WKScriptMessageHandler {
                     return
                 }
 
+                if let serviceWebView = message.webView {
+                    webTranslationSnapshots[ObjectIdentifier(serviceWebView)] =
+                        WebTranslationSnapshot(
+                            source: expectedSource,
+                            translation: translation
+                        )
+                }
+
                 if !didLogFirstTranslationResult {
                     didLogFirstTranslationResult = true
                     logStartupTiming("First translation result appeared")
@@ -233,6 +241,8 @@ extension ViewController: WKScriptMessageHandler {
             "inputDispatchedMS": "input_dispatched_ms",
             "pageVisibility": "page_visibility",
             "pageFocused": "page_focused",
+            "baselineOrigin": "baseline_origin",
+            "blockedCandidateSourceUTF16": "blocked_candidate_source_utf16",
             "webNetworkRequestCount": "web_network_request_count",
             "webNetworkDetailedCount": "web_network_detailed_count",
             "webNetworkFirstStartMS": "web_network_first_start_ms",
