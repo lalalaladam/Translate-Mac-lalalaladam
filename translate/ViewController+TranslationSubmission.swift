@@ -27,12 +27,21 @@ extension ViewController {
             clearLongTextTranslationForEmptyInput()
             return
         }
-        cancelPrimaryWebWarmupForUserRequest()
-        startTranslationTimingRequest(source: source, session: translationCoordinator.session)
-        logTranslationTiming("swift-begin-translation")
-        if !didLogFirstTranslationCommand {
-            didLogFirstTranslationCommand = true
-            logStartupTiming("First translation command received")
+        let resumedAfterParallelWait = pendingParallelReadySource == source &&
+            pendingParallelReadySession == translationCoordinator.session &&
+            pendingParallelReadyWorkItem == nil
+        if resumedAfterParallelWait {
+            pendingParallelReadySource = nil
+            pendingParallelReadySession = nil
+            logTranslationTiming("parallel-ready-short-wait-finished")
+        } else {
+            cancelPrimaryWebWarmupForUserRequest()
+            startTranslationTimingRequest(source: source, session: translationCoordinator.session)
+            logTranslationTiming("swift-begin-translation")
+            if !didLogFirstTranslationCommand {
+                didLogFirstTranslationCommand = true
+                logStartupTiming("First translation command received")
+            }
         }
 
         let effectiveSourceLanguage = translationCoordinator.effectiveSourceLanguage(
@@ -130,6 +139,28 @@ extension ViewController {
                 translationCoordinator.completedSource
             ) == translationCoordinator.textRemovingLineBreaks(source)
         let chunks = translationCoordinator.splitLongText(source)
+        if chunks.count == 2,
+           !parallelTranslationWebViewReady,
+           parallelTranslationWebViewLoading,
+           parallelTranslationSource == effectiveSourceLanguage,
+           parallelTranslationTarget == targetLanguage,
+           !resumedAfterParallelWait {
+            pendingParallelReadySource = source
+            pendingParallelReadySession = translationCoordinator.session
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self,
+                      self.pendingParallelReadySource == source,
+                      self.pendingParallelReadySession == self.translationCoordinator.session else {
+                    return
+                }
+                self.pendingParallelReadyWorkItem = nil
+                self.beginLongTextTranslation(source)
+            }
+            pendingParallelReadyWorkItem = workItem
+            logTranslationTiming("parallel-ready-short-wait-started")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
+            return
+        }
         if effectiveSourceLanguage != .automatic,
            chunks.count == 1,
            prefersParallelTranslationWebView,
@@ -181,6 +212,15 @@ extension ViewController {
         translateNextLongTextChunk(session: session)
     }
 
+    func resumeTranslationWaitingForParallelIfCurrent() {
+        guard let source = pendingParallelReadySource,
+              pendingParallelReadySession == translationCoordinator.session,
+              longTextSourceView?.string == source else { return }
+        pendingParallelReadyWorkItem?.cancel()
+        pendingParallelReadyWorkItem = nil
+        beginLongTextTranslation(source)
+    }
+
     func submitPendingPrimaryTranslationIfCurrent() {
         guard let source = pendingPrimaryTranslationSource,
               pendingPrimaryTranslationSession == translationCoordinator.session,
@@ -192,6 +232,10 @@ extension ViewController {
         }
         pendingPrimaryTranslationSource = nil
         pendingPrimaryTranslationSession = nil
+        pendingParallelReadyWorkItem?.cancel()
+        pendingParallelReadyWorkItem = nil
+        pendingParallelReadySource = nil
+        pendingParallelReadySession = nil
         beginLongTextTranslation(source)
     }
 

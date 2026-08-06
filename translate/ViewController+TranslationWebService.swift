@@ -77,11 +77,39 @@ extension ViewController {
             self.scheduleParallelWebViewWarmup(
                 source: source,
                 target: target,
-                after: 0.8
+                after: 0.2
             )
         }
         secondaryWebViewWarmupWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    func scheduleAutomaticWarmupAfterStandbyIfIdle() {
+        cancelAutomaticTranslationServiceWarmup()
+        let source = currentSourceLanguage
+        let target = currentTargetLanguage
+        guard source != .automatic else { return }
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.currentSourceLanguage == source,
+                  self.currentTargetLanguage == target,
+                  self.translationCoordinator.debounceWorkItem == nil,
+                  !self.languageSwapInProgress,
+                  self.longTextSourceView?.hasMarkedText() != true,
+                  self.longTextStatusState == .completed ||
+                    self.longTextSourceView?.string
+                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
+                return
+            }
+            self.automaticTranslationWarmupWorkItem = nil
+            self.logTranslationCoordinator(
+                "sequential-automatic-warmup-started",
+                source: ""
+            )
+            self.loadAutomaticTranslationService(target: target)
+        }
+        automaticTranslationWarmupWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
     }
 
     func scheduleParallelWebViewWarmup(
