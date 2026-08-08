@@ -136,6 +136,8 @@ This is a native macOS application and is not intended to run on Windows. It is 
 
 This project is based on [Mac Translate by m-inan](https://github.com/m-inan/mac-translate). The original author and project are explicitly credited for the starting implementation and concept. This repository is an unofficial independent customization and is not affiliated with or endorsed by Google or m-inan.
 
+The application icon was [designed by Lefika (Image #45239855 at VectorStock.com)](https://www.vectorstock.com/royalty-free-vector/app-icon-apple-translate-vector-45239855) and is used under VectorStock's Free License with attribution.
+
 ## Reporting issues and contributing
 
 Please [open an issue](https://github.com/lalalaladam/Translate-Mac-lalalaladam/issues) with reproduction steps, macOS version, app version, and relevant screenshots or logs. Contributions and focused pull requests are welcome. Changes involving Google Translate selectors should include a clear explanation of the affected interface behavior.
