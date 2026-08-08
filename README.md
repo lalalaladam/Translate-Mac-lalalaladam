@@ -6,6 +6,7 @@ A native macOS translation workspace with a glass interface, multilingual suppor
 
 | Version | Main Changes |
 |---|---|
+| v1.0.20 | The software icon has been changed. (修改了软件图标) |
 | v1.0.19 | Fixed a bug related to the input box slider, as well as other bugs. (修复了输入框滑块的bug，以及其他的bug) |
 | v1.0.18 | Add custom About window, minimize support, undo/redo and parallel translation. (添加自定义“关于”窗口、最小化支持、撤销/重做和并行翻译功能) |
 | v1.0.17 | No changes were made to the functionality; the huge Swift file was split up (没有改变功能，拆分了巨大的swift文件) |
