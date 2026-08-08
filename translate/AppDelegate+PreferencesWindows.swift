@@ -35,7 +35,7 @@ extension AppDelegate {
 
 final class AboutWindowController: NSWindowController {
     private static let contentWidth: CGFloat = AppBuildMetadata.isDebugBuild ? 600 : 540
-    private static let contentHeight: CGFloat = AppBuildMetadata.isDebugBuild ? 492 : 392
+    private static let contentHeight: CGFloat = AppBuildMetadata.isDebugBuild ? 528 : 428
 
     init() {
         let window = NSWindow(
@@ -111,8 +111,8 @@ final class AboutWindowController: NSWindowController {
 
         let credits = label(
             interfaceText(
-                "GitHub：lalalaladam\n\n致谢原作者：m-inan\n原始项目：github.com/m-inan/mac-translate\n\n图标由 Lefika 设计（VectorStock 图片 #45239855）\n\n本项目是独立重构和扩展版本，未获得原作者官方认可。",
-                "GitHub: lalalaladam\n\nOriginal author: m-inan\nOriginal project: github.com/m-inan/mac-translate\n\nIcon designed by Lefika (VectorStock Image #45239855)\n\nThis is an independent redesign and extension and is not officially endorsed by the original author."
+                "署名与致谢\n\nGitHub：github.com/lalalaladam/Translate-Mac-lalalaladam\n\n致谢原作者：m-inan\n原始项目：github.com/m-inan/mac-translate\n\n图标由 Lefika 设计（VectorStock 图片 #45239855）\n依据 VectorStock Free License 使用并保留署名。\n\n本项目是独立重构和扩展版本，未获得原作者官方认可。",
+                "Attribution & Credits\n\nGitHub: github.com/lalalaladam/Translate-Mac-lalalaladam\n\nOriginal author: m-inan\nOriginal project: github.com/m-inan/mac-translate\n\nIcon designed by Lefika (VectorStock Image #45239855)\nUsed under the VectorStock Free License with attribution.\n\nThis is an independent redesign and extension and is not officially endorsed by the original author."
             ),
             size: 12,
             color: .secondaryLabelColor
@@ -121,7 +121,7 @@ final class AboutWindowController: NSWindowController {
         credits.maximumNumberOfLines = 0
         credits.lineBreakMode = .byWordWrapping
         credits.preferredMaxLayoutWidth = Self.contentWidth - 64
-        place(credits, in: content, top: &top, height: 154, width: size.width - 64)
+        place(credits, in: content, top: &top, height: 190, width: size.width - 64)
 
         window.contentView = content
         window.setContentSize(size)
